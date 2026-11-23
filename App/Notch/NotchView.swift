@@ -38,6 +38,28 @@ struct NotchView: View {
         switch state.layout {
         case .dormant:
             Color.clear.frame(width: 0, height: 0)
+        case .peek:
+            if case .agentsBusy(let count) = state.wings, let tone = state.agents.tone {
+                Wings(notchWidth: notch.width, height: notch.height) {
+                    Spinner(color: tone.color).frame(width: 11, height: 11)
+                } trailing: {
+                    Text("\(count)").font(.system(size: 12, weight: .semibold).monospacedDigit()).foregroundStyle(tone.color)
+                }
+                .frame(width: state.geometry.size(for: .peek).width)
+            }
+        case .callout:
+            if case .agentAttention(let session, let others) = state.wings {
+                Wings(notchWidth: notch.width, height: notch.height) {
+                    PulsingGlyph(status: session.status)
+                } trailing: {
+                    HStack(spacing: 3) {
+                        Text(session.project).lineLimit(1).truncationMode(.tail)
+                        if others > 0 { Text("+\(others)").foregroundStyle(.white.opacity(0.5)).fixedSize() }
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                }
+                .frame(width: state.geometry.size(for: .callout).width)
+            }
         case .glance:
             let accent = (state.countdown.phase ?? state.selection).accent
             Wings(notchWidth: notch.width, height: notch.height) {
@@ -50,6 +72,7 @@ struct NotchView: View {
                 }
                 .opacity(state.countdown.isPaused ? 0.45 : 1)
             }
+            .overlay(alignment: .leading) { AgentBadge(tone: state.agentBadge) }
             .frame(width: state.geometry.size(for: .glance).width)
         case .alert:
             let accent = (state.countdown.phase ?? state.selection).accent
@@ -58,6 +81,7 @@ struct NotchView: View {
             } trailing: {
                 Text("Done").font(.system(size: 13, weight: .semibold)).foregroundStyle(accent)
             }
+            .overlay(alignment: .leading) { AgentBadge(tone: state.agentBadge) }
             .frame(width: state.geometry.size(for: .alert).width)
         case .expanded:
             ExpandedPanel(state: state, send: controller.send)
@@ -89,6 +113,46 @@ extension Phase {
         case .rest: "Break over"
         case .custom: "Time's up"
         }
+    }
+}
+
+extension AgentStatus {
+    var color: Color {
+        switch self {
+        case .working: Color(red: 0.5, green: 0.74, blue: 1)
+        case .permission, .question: Color(red: 1, green: 0.65, blue: 0.2)
+        case .done: Color(red: 0.32, green: 0.86, blue: 0.5)
+        case .failed: Color(red: 1, green: 0.36, blue: 0.36)
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .working: "circle.dotted"
+        case .permission: "hand.raised.fill"
+        case .question: "questionmark"
+        case .done: "checkmark"
+        case .failed: "exclamationmark"
+        }
+    }
+}
+
+extension AgentSession {
+    /// The row's second column: what the agent is doing or waiting for.
+    var detail: String {
+        switch status {
+        case .working: toolName.map { "Working · \($0)" } ?? "Working"
+        case .permission: toolName.map { "Allow \($0)?" } ?? "Needs permission"
+        case .question: toolName == "ExitPlanMode" ? "Plan to review" : "Has a question"
+        case .done: "Done"
+        case .failed: "Failed"
+        }
+    }
+
+    func elapsed(at now: Instant) -> String {
+        let minutes = Int(since.duration(to: now).components.seconds / 60)
+        if minutes < 1 { return "now" }
+        return minutes < 60 ? "\(minutes)m" : "\(minutes / 60)h"
     }
 }
 
@@ -201,12 +265,13 @@ private struct ProgressRing: View {
 
 private struct PulsingDot: View {
     let color: Color
+    var size: CGFloat = 9
     @State private var expanded = false
 
     var body: some View {
         Circle()
             .fill(color)
-            .frame(width: 9, height: 9)
+            .frame(width: size, height: size)
             .background(
                 Circle()
                     .fill(color.opacity(expanded ? 0 : 0.7))
@@ -237,15 +302,58 @@ private struct ExpandedPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                modeLabel
+                if state.page == .agents {
+                    Label("Agents", accent: state.agents.tone?.color ?? .white.opacity(0.5), tinted: false)
+                } else {
+                    modeLabel
+                }
                 Spacer(minLength: state.geometry.notch.width)
                 if isTyping {
                     Text("minutes · ⏎").font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.45))
+                } else {
+                    pageChip
                 }
             }
             .padding(.horizontal, 18)
             .frame(height: state.geometry.notch.height)
 
+            if state.page == .agents {
+                AgentList(state: state, send: send)
+            } else {
+                timerPage
+            }
+        }
+    }
+
+    /// The other page's chip: agents (with a count) from the timer, the timer from agents.
+    @ViewBuilder
+    private var pageChip: some View {
+        if state.page == .agents {
+            Chip(title: "Timer", detail: nil, selected: false) { send(.showPage(.timer)) }
+        } else if let tone = state.agents.tone {
+            Button { send(.showPage(.agents)) } label: {
+                HStack(spacing: 5) {
+                    if state.agents.attention.isEmpty {
+                        Spinner(color: tone.color).frame(width: 9, height: 9)
+                    } else {
+                        PulsingDot(color: tone.color, size: 6)
+                    }
+                    Text("\(state.agents.visible.count)").monospacedDigit()
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(tone.color)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(.white.opacity(0.1)))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Agents")
+        }
+    }
+
+    private var timerPage: some View {
+        VStack(spacing: 0) {
             HStack {
                 time
                 Spacer()
@@ -451,5 +559,122 @@ private struct Chip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A turning arc: agents are working.
+private struct Spinner: View {
+    let color: Color
+    @State private var turned = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.7)
+            .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .rotationEffect(.degrees(turned ? 360 : 0))
+            .onAppear {
+                withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) { turned = true }
+            }
+    }
+}
+
+/// An agent's status glyph in a pulsing disc, for the callout wings.
+private struct PulsingGlyph: View {
+    let status: AgentStatus
+    @State private var expanded = false
+
+    var body: some View {
+        Image(systemName: status.symbol)
+            .font(.system(size: 9, weight: .heavy))
+            .foregroundStyle(.black)
+            .frame(width: 16, height: 16)
+            .background(Circle().fill(status.color))
+            .background(
+                Circle()
+                    .fill(status.color.opacity(expanded ? 0 : 0.6))
+                    .scaleEffect(expanded ? 2.2 : 1)
+            )
+            .onAppear {
+                withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) { expanded = true }
+            }
+    }
+}
+
+/// A dot at the outer edge of the left wing: agents have something to show while the timer owns
+/// the wings.
+private struct AgentBadge: View {
+    let tone: AgentStatus?
+
+    var body: some View {
+        if let tone {
+            Circle().fill(tone.color).frame(width: 6, height: 6).padding(.leading, 12)
+        }
+    }
+}
+
+/// The Agents page: one row per session, most urgent first. Clicking a row brings its app forward.
+private struct AgentList: View {
+    let state: NotchState
+    let send: (NotchEvent) -> Void
+
+    var body: some View {
+        let sessions = state.agents.visible
+        if sessions.isEmpty {
+            Text("No agents running")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.4))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            TimelineView(.periodic(from: .now, by: 30)) { _ in
+                ScrollView(.vertical) {
+                    VStack(spacing: 2) {
+                        ForEach(sessions) { session in
+                            AgentRow(session: session, seen: state.agents.isSeen(session), now: .now) {
+                                send(.agentActivated(session.id))
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                }
+                .scrollIndicators(.never)
+            }
+        }
+    }
+}
+
+private struct AgentRow: View {
+    let session: AgentSession
+    let seen: Bool
+    let now: Instant
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: session.status.symbol)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(session.status.color)
+                    .frame(width: 18, height: 18)
+                    .background(Circle().fill(session.status.color.opacity(0.16)))
+                Text(session.project)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Text(session.detail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(session.status == .working ? .white.opacity(0.5) : session.status.color)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(session.elapsed(at: now))
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(seen ? 0.04 : 0.09)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScale())
+        .help("Bring this agent's app to the front")
     }
 }

@@ -4,8 +4,8 @@ import NotchedCore
 
 /// How the app behaves when a script runs it for a test (`NOTCHED_SELFTEST=<output dir>`).
 ///
-/// Every test run: no mouse monitors or screen observers (the test sends synthetic events), no
-/// sound and no notifications, and a panel that is never restorable.
+/// Every test run: no mouse monitors or screen observers (the test sends synthetic events), its own
+/// agent inbox, no other app brought to the front, and a panel that is never restorable.
 ///
 /// Background mode (the default; `NOTCHED_FOREGROUND=1` turns it off), so it stays out of the
 /// user's way on their own Mac:
@@ -26,7 +26,9 @@ enum TestHost {
     static let selfTestOutput = environment["NOTCHED_SELFTEST"].map { URL(fileURLWithPath: $0, isDirectory: true) }
 
     static var shellOptions: ShellOptions {
-        ShellOptions(followsRealInput: false, mayTakeKeyFocus: !isBackground)
+        ShellOptions(followsRealInput: false, mayTakeKeyFocus: !isBackground, mayActivateApps: false,
+                     agentInbox: (selfTestOutput ?? URL(fileURLWithPath: NSTemporaryDirectory()))
+                         .appendingPathComponent("agents", isDirectory: true))
     }
 
     /// A 14-inch MacBook Pro's screen and notch, moved far off-screen.

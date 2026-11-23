@@ -25,9 +25,17 @@ targets:
     platform: macOS
     sources:
       - App
+      - Shared
     dependencies:
       - package: NotchedKit
         product: NotchedCore
+      # The hook helper ships inside the app; Scripts/agent-hooks.sh copies it to a stable path.
+      - target: notched-agent
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
     settings:
       base:
         # UNUserNotificationCenter needs a bundle identifier.
@@ -39,6 +47,19 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
+  notched-agent:
+    type: tool
+    platform: macOS
+    sources:
+      - Agent
+      - Shared
+    dependencies:
+      - package: NotchedKit
+        product: NotchedCore
+    settings:
+      base:
+        PRODUCT_NAME: notched-agent
+        PRODUCT_BUNDLE_IDENTIFIER: app.notched.agent
 schemes:
   Notched:
     build:
