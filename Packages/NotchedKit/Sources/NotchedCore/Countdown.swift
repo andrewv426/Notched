@@ -6,10 +6,10 @@
 public typealias Instant = ContinuousClock.Instant
 
 /// A positive, bounded timer length. Only a validating init exists, so every countdown can start.
-/// The upper bound is exactly the largest value a six-digit `DurationEntry` can spell (99:99:99),
-/// so "the entry can start" is the same as "the entry is not zero".
+/// The upper bound is exactly the largest value a `DurationEntry` can spell (999 minutes), so
+/// "the entry can start" is the same as "the entry is not zero".
 public struct TimerDuration: Hashable, Comparable, Sendable {
-    public static let range: ClosedRange<Int> = 1...(99 * 3600 + 99 * 60 + 99)
+    public static let range: ClosedRange<Int> = 1...(999 * 60)
 
     public let seconds: Int
 
@@ -17,9 +17,6 @@ public struct TimerDuration: Hashable, Comparable, Sendable {
         guard Self.range.contains(seconds) else { return nil }
         self.seconds = seconds
     }
-
-    /// One-click starts in the open panel. The only preset list; views iterate it.
-    public static let presets: [TimerDuration] = [1, 5, 10, 25].compactMap { TimerDuration(seconds: $0 * 60) }
 
     public var duration: Duration { .seconds(seconds) }
 
@@ -32,18 +29,20 @@ public enum Countdown: Equatable, Sendable {
     case idle
     case running(Running)
     case paused(Paused)
-    /// Stays here until the user resets or starts again. `acknowledged` silences the alert
-    /// without leaving the state, so the notch can keep showing "Done" after the sound stops.
+    /// Stays here until the user resets or starts again. `acknowledged` stops the pulse without
+    /// leaving the state, so the open notch can still say which phase just ended.
     case finished(Finished)
 
     public struct Running: Equatable, Sendable {
         public let total: TimerDuration
+        public let phase: Phase
         /// The source of truth while running. Remaining time is derived from it, never decremented.
         public let deadline: Instant
     }
 
     public struct Paused: Equatable, Sendable {
         public let total: TimerDuration
+        public let phase: Phase
         /// Always `.zero < remaining <= total.duration`: a pause at or after the deadline
         /// finishes the timer instead (`apply` settles first).
         public let remaining: Duration
@@ -51,15 +50,15 @@ public enum Countdown: Equatable, Sendable {
 
     public struct Finished: Equatable, Sendable {
         public let total: TimerDuration
-        /// When the run ended. It is also the run's identity for the alerter: two runs cannot
-        /// share a deadline.
+        public let phase: Phase
+        /// When the run ended.
         public let deadline: Instant
         public internal(set) var acknowledged = false
     }
 }
 
 enum TimerCommand: Equatable, Sendable {
-    case start(TimerDuration)
+    case start(TimerDuration, Phase)
     case pause
     case resume
     case reset
@@ -78,12 +77,12 @@ extension Countdown {
     mutating func apply(_ command: TimerCommand, at now: Instant) {
         settle(at: now)
         switch (self, command) {
-        case (.idle, .start(let d)), (.finished, .start(let d)):
-            self = .running(Running(total: d, deadline: now.advanced(by: d.duration)))
+        case (.idle, .start(let d, let phase)), (.finished, .start(let d, let phase)):
+            self = .running(Running(total: d, phase: phase, deadline: now.advanced(by: d.duration)))
         case (.running(let r), .pause):
-            self = .paused(Paused(total: r.total, remaining: now.duration(to: r.deadline)))
+            self = .paused(Paused(total: r.total, phase: r.phase, remaining: now.duration(to: r.deadline)))
         case (.paused(let p), .resume):
-            self = .running(Running(total: p.total, deadline: now.advanced(by: p.remaining)))
+            self = .running(Running(total: p.total, phase: p.phase, deadline: now.advanced(by: p.remaining)))
         case (.running, .reset), (.paused, .reset), (.finished, .reset):
             self = .idle
         default:
@@ -96,11 +95,11 @@ extension Countdown {
     /// unchanged, so this is safe to call from any trigger, any number of times.
     mutating func settle(at now: Instant) {
         if case .running(let r) = self, now >= r.deadline {
-            self = .finished(Finished(total: r.total, deadline: r.deadline))
+            self = .finished(Finished(total: r.total, phase: r.phase, deadline: r.deadline))
         }
     }
 
-    /// Silences a finished alert. Does nothing in every other state.
+    /// Stops a finished run's pulse. Does nothing in every other state.
     mutating func acknowledge() {
         if case .finished(var f) = self, !f.acknowledged {
             f.acknowledged = true
@@ -119,6 +118,16 @@ extension Countdown {
         switch self {
         case .idle, .finished: true
         case .running, .paused: false
+        }
+    }
+
+    /// The phase of the current or last run. Idle: nil.
+    public var phase: Phase? {
+        switch self {
+        case .idle: nil
+        case .running(let r): r.phase
+        case .paused(let p): p.phase
+        case .finished(let f): f.phase
         }
     }
 

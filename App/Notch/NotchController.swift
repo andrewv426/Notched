@@ -4,17 +4,16 @@ import Observation
 import SwiftUI
 
 /// What a run of the shell may touch. Production uses the defaults; a scripted test run turns
-/// them off so it never reacts to the user's mouse, takes their keyboard or makes a sound.
+/// them off so it never reacts to the user's mouse or takes their keyboard.
 struct ShellOptions {
     /// Mouse monitors, screen-change and wake observers.
     var followsRealInput = true
     var mayTakeKeyFocus = true
-    var makesNoise = true
 }
 
 /// The shell. Holds the one `NotchState`, turns every input into a `NotchEvent`, and after each
 /// change matches the AppKit world to the state's projections. It makes no decisions: an `if`
-/// about timer or hover behaviour belongs in `NotchState.reduce`, not here.
+/// about timer or opening behaviour belongs in `NotchState.reduce`, not here.
 ///
 /// Inputs → `send`:
 ///   global + local mouse monitors          → .pointerMoved / .pointerDown
@@ -29,7 +28,6 @@ struct ShellOptions {
 ///   capturesPointer  → panel.ignoresMouseEvents
 ///   wantsKeyFocus    → panel key status
 ///   nextDeadline     → alarm
-///   ringing          → alerter
 ///   layout           → SwiftUI, which observes `state` directly
 @MainActor
 @Observable
@@ -39,7 +37,6 @@ final class NotchController {
 
     @ObservationIgnored let options: ShellOptions
     @ObservationIgnored private(set) var panel: NotchPanel?
-    @ObservationIgnored let alerter: Alerter
     @ObservationIgnored private let alarm = DeadlineAlarm()
     @ObservationIgnored private var monitors: [Any] = []
     @ObservationIgnored private var observers: [(NotificationCenter, any NSObjectProtocol)] = []
@@ -47,7 +44,6 @@ final class NotchController {
     init(geometry: NotchGeometry, options: ShellOptions = ShellOptions()) {
         state = NotchState(geometry: geometry, now: .now)
         self.options = options
-        alerter = Alerter(makesNoise: options.makesNoise)
     }
 
     /// Creates and shows the panel, installs monitors and observers, and reconciles once.
@@ -100,7 +96,6 @@ final class NotchController {
             panel.orderFrontRegardless()
         }
         alarm.arm(at: state.nextDeadline) { [weak self] in self?.send(.tick) }
-        alerter.reflect(state.ringing, starting: state.countdown.deadline != nil)
 
         // The shape changed under a cursor that may not have moved: Esc or Return can shrink it out
         // from under the pointer. Re-sample, or the canvas keeps taking clicks until the next move.

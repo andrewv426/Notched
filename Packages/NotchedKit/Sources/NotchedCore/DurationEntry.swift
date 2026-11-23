@@ -1,22 +1,13 @@
-/// The duration the user is typing, entered like a microwave: digits fill HH:MM:SS from the right
-/// ("2", "5", "0", "0" → 00:25:00). There is no free-text field and so no parse-error state: every
-/// buffer is either zero (Start disabled) or a valid `TimerDuration`.
-///
-/// This is the only record of what Start will run. Presets overwrite it and Restart reuses it.
+/// The custom length the user is typing, in whole minutes ("4", "5" → 45 minutes). There is no
+/// free-text field and so no parse-error state: every buffer is either zero (Start disabled) or a
+/// valid `TimerDuration`.
 public struct DurationEntry: Equatable, Sendable {
-    public static let capacity = 6
+    public static let capacity = 3
 
     /// Most significant first. Never more than `capacity`, never a leading zero.
     public private(set) var digits: [Digit]
 
     public init() { digits = [] }
-
-    /// Spells a duration as digits, normalised: 90 s → 1:30, not 0:90.
-    public init(_ duration: TimerDuration) {
-        let s = duration.seconds
-        let value = (s / 3600) * 10_000 + (s / 60 % 60) * 100 + s % 60
-        digits = String(value).compactMap { Digit($0) }
-    }
 
     /// Appends a digit. Ignored when full, or when it would be a leading zero.
     mutating func push(_ digit: Digit) {
@@ -29,19 +20,11 @@ public struct DurationEntry: Equatable, Sendable {
         if !digits.isEmpty { digits.removeLast() }
     }
 
-    /// The fields as displayed, each 0...99. "90" in the seconds slot stays 90 here; it becomes
-    /// 1:30 only in `duration`.
-    public var fields: (hours: Int, minutes: Int, seconds: Int) {
-        let value = digits.reduce(0) { $0 * 10 + $1.rawValue }
-        return (value / 10_000, value / 100 % 100, value % 100)
-    }
+    public var minutes: Int { digits.reduce(0) { $0 * 10 + $1.rawValue } }
 
-    /// Nil exactly when every digit is zero. Total by construction: the largest entry, 99:99:99,
+    /// Nil exactly when the entry is empty. Total by construction: the largest entry, 999 minutes,
     /// is `TimerDuration.range.upperBound`.
-    public var duration: TimerDuration? {
-        let f = fields
-        return TimerDuration(seconds: f.hours * 3600 + f.minutes * 60 + f.seconds)
-    }
+    public var duration: TimerDuration? { TimerDuration(seconds: minutes * 60) }
 }
 
 public enum Digit: Int, Sendable, CaseIterable {
