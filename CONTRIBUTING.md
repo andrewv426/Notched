@@ -43,9 +43,8 @@ The title follows the commit format. Fill in the description from [the template]
 
 | Change | Place | Test it in |
 |---|---|---|
-| Timer, hover, open/close, editing, layout sizes, anything a rule decides | `Packages/NotchedKit/Sources/NotchedCore` | `NotchedCoreTests` |
+| Timer, phases, open/close, typing, layout sizes, anything a rule decides | `Packages/NotchedKit/Sources/NotchedCore` | `NotchedCoreTests` |
 | The panel, mouse monitors, key presses, screen and wake observers | `App/Notch/NotchController.swift`, `NotchPanel.swift` | `App/Debug/SelfTest.swift` |
 | How it looks | `App/Notch/NotchView.swift` | `App/Debug/SelfTest.swift` snapshots |
-| Sound and notifications | `App/Notch/Alerter.swift` | By hand |
 
-Rules belong in the package, where they run headless in milliseconds. `App/` turns input into `NotchEvent`s and matches AppKit to `NotchState`'s projections; it makes no decisions. If you are about to write an `if` about timer or hover behaviour in `App/`, it belongs in `NotchState.reduce`.
+Rules belong in the package, where they run headless in milliseconds. `App/` turns input into `NotchEvent`s and matches AppKit to `NotchState`'s projections; it makes no decisions. If you are about to write an `if` about timer or opening behaviour in `App/`, it belongs in `NotchState.reduce`.

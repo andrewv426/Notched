@@ -26,7 +26,7 @@ enum TestHost {
     static let selfTestOutput = environment["NOTCHED_SELFTEST"].map { URL(fileURLWithPath: $0, isDirectory: true) }
 
     static var shellOptions: ShellOptions {
-        ShellOptions(followsRealInput: false, mayTakeKeyFocus: !isBackground, makesNoise: false)
+        ShellOptions(followsRealInput: false, mayTakeKeyFocus: !isBackground)
     }
 
     /// A 14-inch MacBook Pro's screen and notch, moved far off-screen.

@@ -2,9 +2,9 @@
 
 ## Problem
 
-A notch timer has two parts that each look simple. One is a countdown. The other is a window that sits over the menu bar without blocking it, opens on hover or click, and stays open while the user types. The hard parts come from time and from inputs arriving from many places: hover needs a dwell before opening and a grace period before closing; the deadline has to survive sleep and a stalled main thread; a Pause click can race the completion alarm; pointer input comes from two `NSEvent` monitors, key status from the panel, and screen changes and wake from notifications. If each source owns a `Timer` and a flag, the rules end up spread across callbacks nobody can test.
+A notch timer has two parts that each look simple. One is a countdown. The other is a window that sits over the menu bar without blocking it, opens on a click, closes when the pointer leaves, and stays open while the user types. The hard parts come from time and from inputs arriving from many places: closing waits out a grace period so an overshoot does not collapse it; Pomodoro phases must advance exactly once when a run ends; the deadline has to survive sleep and a stalled main thread; a Pause click can race the completion alarm; pointer input comes from two `NSEvent` monitors, key status from the panel, and screen changes and wake from notifications. If each source owns a `Timer` and a flag, the rules end up spread across callbacks nobody can test.
 
-Constraints: Swift 6 strict concurrency; an agent app (`LSUIElement`); the notch rect comes from `NSScreen.safeAreaInsets` and the auxiliary top areas, with a fallback for screens without one; the panel must not take menu-bar clicks while closed; `UNUserNotificationCenter` needs an app bundle; and the deployment target is macOS 26 so the app runs in the `flotion-test` VM.
+Constraints: Swift 6 strict concurrency; an agent app (`LSUIElement`); the notch rect comes from `NSScreen.safeAreaInsets` and the auxiliary top areas, with a fallback for screens without one; the panel must not take menu-bar clicks while closed; and the deployment target is macOS 26 so the app runs in the `flotion-test` VM.
 
 ## Usage (caller's view)
 
@@ -19,9 +19,9 @@ controller.send(.pointerMoved(NSEvent.mouseLocation, dragging: false))
 
 // 3. A test: behaviour as data, no window, no sleeping.
 var s = NotchState(geometry: g, now: t0)
-s.reduce(.preset(TimerDuration(seconds: 60)!), at: t0)
-s.reduce(.timer(.pause), at: t0.advanced(by: .seconds(61)))   // the alarm has not fired yet
-#expect(s.ringing != nil)                                     // pause did not bring it back
+s.reduce(.timer(.start), at: t0)                                // Focus 50
+s.reduce(.tick, at: t0.advanced(by: .seconds(50 * 60)))
+#expect(s.selection == .rest)                                  // the 10-minute break is next
 ```
 
 ## Shape
@@ -36,7 +36,6 @@ flowchart LR
   S -- "capturesPointer" --> PW[panel.ignoresMouseEvents]
   S -- "wantsKeyFocus" --> PK[panel key status]
   S -- "geometry.canvas" --> PF[panel frame]
-  S -- "ringing" --> AL[Alerter]
   S -- "nextDeadline" --> DA[DeadlineAlarm]
   DA -- ".tick" --> C
   S -. "observed" .-> V
@@ -44,17 +43,17 @@ flowchart LR
 
 **One value, one mutator.** `NotchState` (in `NotchedCore`, no AppKit) holds `countdown`, `entry`, `surface` and `geometry`. `reduce(event, at: now)` is the only way to change it. The mutators on the parts are `internal`, so the app target has no second route.
 
-**Time is timestamps, never counters.** `Countdown.running` stores a `ContinuousClock` deadline; remaining time is derived. `Surface` stores which side of the shape the pointer is on and since when, so dwell, grace and "Esc with the pointer resting on the notch does not reopen it" are comparisons. The domain holds no timers: `nextDeadline` is the earliest instant anything changes on its own, and the shell keeps one wake-up armed for it.
+**Time is timestamps, never counters.** `Countdown.running` stores a `ContinuousClock` deadline; remaining time is derived. `Surface` stores which side of the shape the pointer is on and since when, so the leave grace period is a comparison. The domain holds no timers: `nextDeadline` is the earliest instant anything changes on its own, and the shell keeps one wake-up armed for it.
 
-**Every event settles.** After applying an event, `reduce` settles the countdown and the surface against `now`, then applies one cross-cutting rule: opening the notch silences Done. So a late or duplicate alarm, or an extra `.tick` on wake, changes nothing, and a Pause after the deadline cannot bring a finished timer back.
+**Every event settles.** After applying an event, `reduce` settles the countdown and the surface against `now`. A run that went from running to finished inside this call moves the selection to the next phase (focus → its break → the same focus), so the advance happens exactly once however often the finish is settled again. Then one cross-cutting rule: opening the notch acknowledges Done, which stops the pulse. There is no sound and no notification. So a late or duplicate alarm, or an extra `.tick` on wake, changes nothing, and a Pause after the deadline cannot bring a finished timer back.
 
 **Projections, not effects.** The reducer returns no effect values. After each change, the controller matches AppKit to five projections, and each step does nothing if AppKit already matches. Replaying an event or reconciling twice converges.
 
-**A fixed canvas.** The panel's frame is the union of every layout's rect and changes only when screens change. SwiftUI springs the black shape inside it. Click-through is `ignoresMouseEvents = !capturesPointer`, and one rect per layout answers both "is the pointer hovering?" and "does the window take this click?".
+**A fixed canvas.** The panel's frame is the union of every layout's rect and changes only when screens change. SwiftUI springs the black shape inside it. Click-through is `ignoresMouseEvents = !capturesPointer`, and one rect per layout answers both "is the pointer on the notch?" and "does the window take this click?".
 
-**Key focus only while editing.** A notch opened by hover never becomes key, so it never takes keystrokes. Clicking the HH:MM:SS display makes the non-activating panel key; the frontmost app stays in front, and gets the keyboard back when editing ends (the panel is ordered out and back while it may no longer become key, instead of calling `resignKey()`). Key presses go through `NotchPanel.sendEvent` to `.key` events, so there is no SwiftUI focus to manage.
+**Key focus only while editing.** An open notch never becomes key, so it never takes keystrokes. Choosing Custom (or clicking the time) makes the non-activating panel key; the frontmost app stays in front, and gets the keyboard back when editing ends (the panel is ordered out and back while it may no longer become key, instead of calling `resignKey()`). Key presses go through `NotchPanel.sendEvent` to `.key` events, so there is no SwiftUI focus to manage.
 
-**Interface depth.** The shell sees `NotchState` (four read-only parts and five projections), `NotchEvent` and `reduce`. Hidden behind that: the transition table, settle-first ordering, dwell, grace and re-entry suppression, the edit lock, digit entry and normalisation, rounding, layout sizes and the notch-rect math.
+**Interface depth.** The shell sees `NotchState` (four read-only parts and five projections), `NotchEvent` and `reduce`. Hidden behind that: the transition table, settle-first ordering, which phase follows which, the grace period, the edit lock, minute entry, rounding, layout sizes and the notch-rect math.
 
 Deliberately not done: multiple timers, persistence across relaunch, launch at login, settings.
 
@@ -67,6 +66,7 @@ Three candidates were designed in parallel (Claude Opus 5.5, GPT-6.2 Sol, Gemini
 - **From candidate 2 (GPT):** handing the keyboard back by ordering the panel out and back instead of calling `resignKey()`.
 - **From the cross-judge:** a timer that finishes while the notch is already open still rings (only *opening* the notch acknowledges, not *being* open); one public mutator instead of `reduce` plus `reducing`; and the shell re-samples the pointer when the layout changes under a still cursor, so the canvas never keeps taking clicks after Esc.
 - **Rejected:** candidate 2's trigger strip below the notch (the user asked to hover the notch itself) and its resized window; candidate 3's effect-returning reducer and pointer position in observed state (every mouse move re-rendered SwiftUI).
+- **Redesign (Pomodoro):** click to open instead of hover (a dwell kept opening it on the way to the menu bar), Focus 50/25 with matching breaks and Custom minutes, silent completion, and a smaller 400 × 142 panel whose content fades in after the shape springs open.
 - **Late constraints:** the ArcX layout (XcodeGen app + `NotchedKit` package, `Scripts/`, the Debug self-test) and testing in the Tart VM.
 
 ## Tradeoffs accepted

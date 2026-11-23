@@ -85,13 +85,15 @@ enum SelfTest {
             check(abs(black - expected) < 0.03, "only the notch is drawn: black covers \(percent(black)) of the canvas (expected about \(percent(expected)))")
         }
 
-        // MARK: Hover
+        // MARK: Opening
 
         controller.send(.pointerMoved(onNotch, dragging: false))
         check(!panel.ignoresMouseEvents, "with the pointer on the notch, the panel takes the mouse")
-        check(state.layout == .dormant, "the notch does not open before the dwell")
-        check(await waitFor { state.layout == .expanded }, "the notch opens after the dwell (the deadline alarm fired)")
-        check(!panel.isKeyWindow, "opening on hover does not make the panel key")
+        await pause(0.4)
+        check(state.layout == .dormant, "resting the pointer on the notch does not open it")
+        controller.send(.pointerDown(onNotch))
+        check(state.layout == .expanded, "a click opens the notch at once")
+        check(!panel.isKeyWindow, "opening does not make the panel key")
         await pause(0.8)
         if let pixels = snapshot("02-expanded-idle") {
             let black = pixels.share(of: (0, 0, 0))
@@ -100,45 +102,43 @@ enum SelfTest {
 
         controller.send(.pointerMoved(farAway, dragging: false))
         check(panel.ignoresMouseEvents, "with the pointer away, clicks go through at once")
-        check(await waitFor { state.layout == .dormant }, "leaving closes the notch after the grace period")
+        check(await waitFor { state.layout == .dormant }, "leaving closes the notch after the grace period (the deadline alarm fired)")
 
         controller.send(.pointerMoved(onNotch, dragging: true))
-        await pause(0.4)
-        check(state.layout == .dormant && panel.ignoresMouseEvents, "dragging across the closed notch neither opens it nor takes the mouse")
+        check(panel.ignoresMouseEvents, "dragging across the closed notch does not take the mouse")
         controller.send(.pointerMoved(farAway, dragging: false))
 
-        // MARK: Click, type a duration, Return
+        // MARK: Custom: type minutes, Return
 
         controller.send(.pointerDown(onNotch))
-        check(state.layout == .expanded, "a click opens the notch at once")
         let frontmost = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
         let frontBefore = frontmost()
-        controller.send(.beginEditing)
-        check(state.surface.mode == .editing, "clicking the display starts editing")
+        controller.send(.select(.custom))
+        check(state.surface.mode == .editing, "choosing Custom starts typing")
         if controller.options.mayTakeKeyFocus {
-            check(await waitFor(2) { panel.isKeyWindow }, "while editing, the panel is key")
+            check(await waitFor(2) { panel.isKeyWindow }, "while typing, the panel is key")
             // A key non-activating panel reports NSApp.isActive, but the app in front stays in front:
-            // its menu bar stays, and it gets the keyboard back when editing ends.
+            // its menu bar stays, and it gets the keyboard back when typing ends.
             check(frontmost() == frontBefore, "becoming key leaves the frontmost app in front")
         } else {
-            skip("the panel becomes key while editing", "a background run never takes the keyboard; run Scripts/vm-selftest.sh")
+            skip("the panel becomes key while typing", "a background run never takes the keyboard; run Scripts/vm-selftest.sh")
         }
         key("1", code: 18)
         key("5", code: 23)
-        check(state.entry.fields == (0, 0, 15), "typed digits fill the display from the right, got \(state.entry.fields)")
+        check(state.entry.minutes == 15, "typed digits are minutes, got \(state.entry.minutes)")
         await pause(0.4)
-        _ = snapshot("03-editing")
+        _ = snapshot("03-custom")
         key("\r", code: 36)
         guard case .running(let run) = state.countdown else {
-            check(false, "Return starts the typed duration, got \(state.countdown)")
+            check(false, "Return starts the typed length, got \(state.countdown)")
             finish(log: log, passed: passed, failed: failed, skipped: skipped, output: output)
         }
-        check(run.total.seconds == 15, "Return starts the typed duration (15 s)")
-        check(state.surface.mode == .browsing, "Return stops editing")
-        check(await waitFor(2) { !panel.isKeyWindow } && panel.isVisible, "after editing, the panel gives the keyboard back and stays on screen")
+        check(run.total.seconds == 15 * 60 && run.phase == .custom, "Return starts 15 minutes as Custom")
+        check(state.surface.mode == .browsing, "Return stops typing")
+        check(await waitFor(2) { !panel.isKeyWindow } && panel.isVisible, "after typing, the panel gives the keyboard back and stays on screen")
         if controller.options.mayTakeKeyFocus {
             check(await waitFor(2) { !NSApp.isActive } && frontmost() == frontBefore,
-                  "after editing, the app is inactive again and the frontmost app is unchanged")
+                  "after typing, the app is inactive again and the frontmost app is unchanged")
         }
 
         controller.send(.timer(.pause))
@@ -147,54 +147,57 @@ enum SelfTest {
         check(state.countdown.remaining(at: .now) == left, "a paused timer holds its remainder")
         controller.send(.timer(.resume))
         check(state.countdown.deadline != nil, "resume runs again")
+        await pause(0.6)
+        _ = snapshot("04-running-open")
 
         controller.send(.pointerMoved(inPanel, dragging: false))
         controller.send(.pointerMoved(farAway, dragging: false))
         check(await waitFor { state.layout == .glance }, "closed while running, the notch shows the glance wings")
         await pause(0.8)
-        if let pixels = snapshot("04-glance") {
+        if let pixels = snapshot("05-glance") {
             let black = pixels.share(of: (0, 0, 0))
             let size = g.size(for: .glance)
             let expected = (size.width * size.height) / (g.canvas.width * g.canvas.height)
             check(black > expected * 0.6 && black < expected * 1.1,
                   "the wings are drawn: black covers \(percent(black)) of the canvas (shape is \(percent(expected)))")
-            check(pixels.share(of: (255, 255, 255), tolerance: 60) > 0.0005, "the wings show white text and ring")
+            check(pixels.share(of: (255, 255, 255), tolerance: 60) > 0.0005, "the wings show white text")
         }
         controller.send(.timer(.reset))
         check(state.layout == .dormant, "reset returns to idle and closed")
 
-        // MARK: Completion
+        // MARK: Completion and the next phase
 
         guard let two = TimerDuration(seconds: 2) else { return }
         controller.send(.pointerDown(onNotch))
-        controller.send(.preset(two))
+        controller.send(.run(two, .focus(.fifty)))
         controller.send(.pointerDown(farAway))
-        check(state.layout == .glance, "a preset starts at once, and a click outside closes the notch")
-        check(await waitFor(4) { state.layout == .alert }, "at the deadline the notch shows Done (the alarm fired)")
-        check(state.ringing != nil && controller.alerter.sounding == state.ringing?.deadline, "the alerter rings for this run")
+        check(state.layout == .glance, "a run starts at once, and a click outside closes the notch")
+        check(await waitFor(4) { state.layout == .alert }, "at the deadline the notch pulses Done (the alarm fired)")
+        check(state.selection == .rest, "after a focus, the break is selected")
         await pause(0.8)
-        _ = snapshot("05-alert")
-        controller.send(.pointerMoved(onNotch, dragging: false))
-        check(await waitFor { state.layout == .expanded }, "hovering opens the finished timer")
-        check(state.ringing == nil && controller.alerter.sounding == nil, "opening the notch silences the alert")
+        _ = snapshot("06-alert")
+        controller.send(.pointerDown(onNotch))
+        check(state.layout == .expanded && state.ringing == nil, "clicking opens the finished timer and stops the pulse")
+        check(state.startable == FocusLength.fifty.rest, "Start would run the 10-minute break")
         await pause(0.8)
-        _ = snapshot("06-done")
-        controller.send(.timer(.reset))
-        controller.send(.pointerMoved(farAway, dragging: false))
-        check(await waitFor { state.layout == .dormant }, "Dismiss, then leaving, closes the notch")
+        _ = snapshot("07-done-open")
+        controller.send(.pointerDown(farAway))
+        check(state.layout == .dormant, "once seen, a finished timer closes to the bare notch")
 
         controller.send(.pointerDown(onNotch))
-        controller.send(.preset(two))
-        check(await waitFor(4) { state.ringing != nil }, "a timer that finishes while the notch is open still rings")
+        controller.send(.run(two, .rest))
+        check(await waitFor(4) { state.ringing != nil }, "a timer that finishes while the notch is open still pulses")
+        check(state.selection == .focus(.fifty), "after the break, the focus it followed is selected")
         controller.send(.timer(.reset))
 
         // MARK: Esc with the pointer resting on the notch
 
-        controller.send(.beginEditing)
+        controller.send(.select(.custom))
         key("\u{1b}", code: 53)
         check(state.layout == .dormant, "Esc closes the notch")
+        check(state.selection == .custom, "Esc keeps Custom when it already has a length (15 minutes, from earlier)")
         await pause(0.5)
-        check(state.layout == .dormant, "with the pointer still on the notch, it stays closed until the pointer leaves")
+        check(state.layout == .dormant, "with the pointer still on the notch, it stays closed")
         controller.send(.pointerMoved(farAway, dragging: false))
 
         // MARK: Screens

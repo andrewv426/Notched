@@ -5,10 +5,10 @@ import CoreGraphics
 public enum NotchLayout: Hashable, Sendable, CaseIterable {
     /// Idle and closed: exactly the hardware notch (or the fallback pill).
     case dormant
-    /// Running or paused and closed: thin wings either side of the notch, a ring on the left and
-    /// the remaining time on the right.
+    /// Running or paused and closed: wings either side of the notch, a ring on the left and the
+    /// remaining time on the right.
     case glance
-    /// Finished and closed: wider wings that pulse "Done".
+    /// Finished, not yet seen, and closed: the same wings, pulsing "Done".
     case alert
     /// Open: the full panel hanging below the notch.
     case expanded
@@ -54,8 +54,7 @@ public struct NotchGeometry: Equatable, Sendable {
     public func size(for layout: NotchLayout) -> CGSize {
         switch layout {
         case .dormant: notch.size
-        case .glance: CGSize(width: notch.width + 2 * Metrics.glanceWing, height: notch.height)
-        case .alert: CGSize(width: notch.width + 2 * Metrics.alertWing, height: notch.height)
+        case .glance, .alert: CGSize(width: notch.width + 2 * Metrics.wing, height: notch.height)
         case .expanded: CGSize(width: max(notch.width + 2 * Metrics.panelWing, Metrics.panelMinWidth),
                                height: notch.height + Metrics.panelBody)
         }
@@ -77,10 +76,10 @@ public struct NotchGeometry: Equatable, Sendable {
 
     enum Metrics {
         static let fallbackNotch = CGSize(width: 180, height: 26)
-        static let glanceWing: CGFloat = 64
-        static let alertWing: CGFloat = 84
-        static let panelWing: CGFloat = 110
+        /// Fits a ring on the left and "1:02:03" on the right.
+        static let wing: CGFloat = 56
+        static let panelWing: CGFloat = 90
         static let panelMinWidth: CGFloat = 400
-        static let panelBody: CGFloat = 150
+        static let panelBody: CGFloat = 104
     }
 }

@@ -1,6 +1,6 @@
 # Notched
 
-A macOS notch timer (Swift, AppKit + SwiftUI): hover or click the notch and it opens into a timer. Read [README.md](README.md) for the layout, [docs/architecture.md](docs/architecture.md) for the design, and [CONTRIBUTING.md](CONTRIBUTING.md) for commit, PR and placement rules; they apply to everything below.
+A macOS notch timer (Swift, AppKit + SwiftUI): click the notch and it opens into a Pomodoro timer. Read [README.md](README.md) for the layout, [docs/architecture.md](docs/architecture.md) for the design, and [CONTRIBUTING.md](CONTRIBUTING.md) for commit, PR and placement rules; they apply to everything below.
 
 ## One worktree and branch per feature or fix
 
@@ -21,7 +21,7 @@ git worktree add .worktrees/<name> -b <type>/<name> origin/main
 
 The user keeps working on this Mac while tests run, so test in the background by default:
 
-- `swift test` and `./Scripts/verify.sh`, including `--ui`, show nothing on screen. The in-app self-test runs in background mode: the notch is a synthetic one on a screen 30 000 pt off-screen, the panel is transparent, it never becomes key, no mouse monitors are installed (the test sends synthetic pointer events), and it makes no sound and posts no notification.
+- `swift test` and `./Scripts/verify.sh`, including `--ui`, show nothing on screen. The in-app self-test runs in background mode: the notch is a synthetic one on a screen 30 000 pt off-screen, the panel is transparent, it never becomes key, no mouse monitors are installed (the test sends synthetic pointer events).
 - Ask first before anything that takes over the screen, mouse or keyboard on this Mac: computer use, or launching the app normally.
 
 ### What a background run cannot check
@@ -29,10 +29,9 @@ The user keeps working on this Mac while tests run, so test in the background by
 | Not checked in the background | Why | How to check it |
 |---|---|---|
 | The panel becoming key while a duration is typed, and handing the keyboard back | A background run never takes the keyboard | `Scripts/vm-selftest.sh` (the Tart VM, below) |
-| The real mouse: hover over the physical notch, clicks reaching menu-bar items beside the notch through the transparent canvas, drags | The self-test sends synthetic pointer events; the VM has no notch | By hand on a notched MacBook |
+| The real mouse: clicks on the physical notch, closing when the pointer leaves, clicks reaching menu-bar items beside the notch through the transparent canvas, drags | The self-test sends synthetic pointer events; the VM has no notch | By hand on a notched MacBook |
 | The real keyboard path: typing into the panel from another app | The self-test sends key events straight to the panel | By hand |
 | How it looks over the real menu bar, the spring animation, full-screen Spaces | Snapshots render the panel to a bitmap off-screen | The PNGs from `Scripts/vm-selftest.sh` (no notch there), or by hand |
-| The completion sound and the system notification | Test runs are silent | By hand: start a 1-minute preset |
 | Behaviour across sleep and wake | Not scripted | By hand: start a timer, sleep, wake after it ends |
 
 The self-test skips focus checks it cannot run and lists them as `skip` in the `RESULT` line, never passing them silently.

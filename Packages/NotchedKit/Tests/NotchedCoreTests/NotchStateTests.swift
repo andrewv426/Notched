@@ -14,7 +14,6 @@ private let inPanel = CGPoint(x: 756, y: 860)
 private let farAway = CGPoint(x: 100, y: 100)
 
 private func at(_ ms: Int) -> Instant { t0.advanced(by: .milliseconds(ms)) }
-private func seconds(_ s: Int) -> TimerDuration { TimerDuration(seconds: s)! }
 
 private func openState() -> NotchState {
     var s = NotchState(geometry: geometry, now: t0)
@@ -22,27 +21,39 @@ private func openState() -> NotchState {
     return s
 }
 
+/// Opens the notch, types `minutes` as a custom length and presses Return.
+private func runCustom(_ s: inout NotchState, minutes: Int, at now: Instant) {
+    s.reduce(.pointerDown(onNotch), at: now)
+    s.reduce(.select(.custom), at: now)
+    for c in String(minutes) { s.reduce(.key(.digit(Digit(c)!)), at: now) }
+    s.reduce(.key(.submit), at: now)
+}
+
+private func minutes(_ m: Int) -> Duration { .seconds(m * 60) }
+
 @Suite struct Countdowns {
-    @Test func presetStartsAndFinishesAtItsDeadline() {
-        var s = NotchState(geometry: geometry, now: t0)
-        s.reduce(.preset(seconds(60)), at: t0)
-        #expect(s.nextDeadline == t0.advanced(by: .seconds(60)))
-        #expect(s.countdown.readout(at: at(500)).text == "1:00")
-        s.reduce(.tick, at: at(61_000))
-        #expect(s.ringing?.deadline == t0.advanced(by: .seconds(60)))
+    @Test func startRunsTheSelectedPhaseAndFinishesAtItsDeadline() {
+        var s = openState()
+        #expect(s.selection == .focus(.fifty))
+        s.reduce(.timer(.start), at: t0)
+        #expect(s.nextDeadline == t0.advanced(by: minutes(50)))
+        #expect(s.countdown.readout(at: at(500)).text == "50:00")
+        s.reduce(.pointerDown(farAway), at: at(1_000))
+        s.reduce(.tick, at: t0.advanced(by: minutes(51)))
+        #expect(s.ringing?.deadline == t0.advanced(by: minutes(50)))
         #expect(s.layout == .alert)
     }
 
     @Test func pauseAfterTheDeadlineDoesNotBringTheTimerBack() {
         var s = NotchState(geometry: geometry, now: t0)
-        s.reduce(.preset(seconds(60)), at: t0)
+        runCustom(&s, minutes: 1, at: t0)
         s.reduce(.timer(.pause), at: at(61_000))   // the alarm has not fired yet
         guard case .finished = s.countdown else { Issue.record("expected finished, got \(s.countdown)"); return }
     }
 
     @Test func pauseKeepsTheExactRemainderAndResumeMovesTheDeadline() {
         var s = NotchState(geometry: geometry, now: t0)
-        s.reduce(.preset(seconds(60)), at: t0)
+        runCustom(&s, minutes: 1, at: t0)
         s.reduce(.timer(.pause), at: at(10_250))
         #expect(s.countdown.remaining(at: at(99_000)) == .milliseconds(49_750))
         #expect(s.nextDeadline == nil)
@@ -52,7 +63,7 @@ private func openState() -> NotchState {
 
     @Test func replayingAnEventConverges() {
         var once = NotchState(geometry: geometry, now: t0)
-        once.reduce(.preset(seconds(300)), at: t0)
+        runCustom(&once, minutes: 5, at: t0)
         once.reduce(.timer(.pause), at: at(10_000))
         var twice = once
         twice.reduce(.timer(.pause), at: at(20_000))
@@ -60,36 +71,27 @@ private func openState() -> NotchState {
         #expect(once == twice)
     }
 
-    @Test func openingTheNotchSilencesTheAlertForGood() {
+    @Test func openingTheNotchStopsThePulseForGood() {
         var s = NotchState(geometry: geometry, now: t0)
-        s.reduce(.preset(seconds(1)), at: t0)
-        s.reduce(.tick, at: at(1_000))
+        runCustom(&s, minutes: 1, at: t0)
+        s.reduce(.pointerDown(farAway), at: at(10))
+        s.reduce(.tick, at: at(60_000))
         #expect(s.ringing != nil)
-        s.reduce(.pointerDown(onNotch), at: at(2_000))
+        #expect(s.layout == .alert)
+        s.reduce(.pointerDown(onNotch), at: at(61_000))
         #expect(s.ringing == nil)
-        s.reduce(.pointerDown(farAway), at: at(3_000))
-        #expect(s.ringing == nil)
-        #expect(s.layout == .alert)   // still shows Done until dismissed
-        s.reduce(.timer(.reset), at: at(4_000))
+        s.reduce(.pointerDown(farAway), at: at(62_000))
         #expect(s.layout == .dormant)
     }
 
-    @Test func aTimerThatFinishesWhileTheNotchIsOpenStillRings() {
-        var s = openState()
-        s.reduce(.preset(seconds(2)), at: t0)
-        s.reduce(.tick, at: at(2_000))
+    @Test func aTimerThatFinishesWhileTheNotchIsOpenStillPulsesAfterItCloses() {
+        var s = NotchState(geometry: geometry, now: t0)
+        runCustom(&s, minutes: 1, at: t0)
+        s.reduce(.tick, at: at(60_000))
         #expect(s.layout == .expanded)
         #expect(s.ringing != nil)
-        s.reduce(.timer(.reset), at: at(3_000))   // Dismiss
-        #expect(s.ringing == nil)
-    }
-
-    @Test func restartRunsTheSameDurationAgain() {
-        var s = NotchState(geometry: geometry, now: t0)
-        s.reduce(.preset(seconds(5)), at: t0)
-        s.reduce(.tick, at: at(5_000))
-        s.reduce(.timer(.start), at: at(6_000))
-        #expect(s.nextDeadline == at(11_000))
+        s.reduce(.pointerDown(farAway), at: at(61_000))
+        #expect(s.layout == .alert)
     }
 
     @Test func readoutRoundsUpAndFormats() {
@@ -97,24 +99,74 @@ private func openState() -> NotchState {
         #expect(Readout(wholeSeconds: 1500).text == "25:00")
         #expect(Readout(wholeSeconds: 3723).text == "1:02:03")
         var s = NotchState(geometry: geometry, now: t0)
-        s.reduce(.preset(seconds(60)), at: t0)
+        runCustom(&s, minutes: 1, at: t0)
         #expect(s.countdown.readout(at: at(59_900)).text == "0:01")
     }
 }
 
-@Suite struct Hover {
-    @Test func opensAfterTheDwellAndClosesAfterTheGrace() {
+@Suite struct Pomodoro {
+    @Test func aFocusIsFollowedByItsBreakAndTheBreakByTheSameFocus() {
+        var s = openState()
+        s.reduce(.select(.focus(.twentyFive)), at: t0)
+        s.reduce(.timer(.start), at: t0)
+        s.reduce(.tick, at: t0.advanced(by: minutes(25)))
+        #expect(s.countdown.phase == .focus(.twentyFive))
+        #expect(s.selection == .rest)
+        #expect(s.startable == TimerDuration(seconds: 5 * 60))
+        s.reduce(.timer(.start), at: t0.advanced(by: minutes(26)))
+        s.reduce(.tick, at: t0.advanced(by: minutes(31)))
+        #expect(s.selection == .focus(.twentyFive))
+    }
+
+    @Test func theBreakAfterAFiftyMinuteFocusIsTenMinutes() {
+        var s = openState()
+        s.reduce(.timer(.start), at: t0)
+        s.reduce(.tick, at: t0.advanced(by: minutes(50)))
+        s.reduce(.timer(.start), at: t0.advanced(by: minutes(50)))
+        #expect(s.countdown.phase == .rest)
+        #expect(s.nextDeadline == t0.advanced(by: minutes(60)))
+    }
+
+    @Test func theNextPhaseIsChosenOnceEvenIfTheFinishIsSettledAgain() {
+        var s = openState()
+        s.reduce(.timer(.start), at: t0)
+        s.reduce(.tick, at: t0.advanced(by: minutes(50)))
+        s.reduce(.select(.focus(.fifty)), at: t0.advanced(by: minutes(51)))
+        s.reduce(.tick, at: t0.advanced(by: minutes(52)))
+        #expect(s.selection == .focus(.fifty))
+    }
+
+    @Test func aChoiceIsIgnoredWhileATimerRuns() {
+        var s = openState()
+        s.reduce(.timer(.start), at: t0)
+        s.reduce(.select(.rest), at: at(10))
+        #expect(s.selection == .focus(.fifty))
+        #expect(s.countdown.phase == .focus(.fifty))
+    }
+}
+
+@Suite struct Opening {
+    @Test func hoveringDoesNotOpenAndAClickDoes() {
         var s = NotchState(geometry: geometry, now: t0)
         s.reduce(.pointerMoved(onNotch, dragging: false), at: t0)
-        #expect(s.layout == .dormant)
         #expect(s.capturesPointer)
-        #expect(s.nextDeadline == at(120))
-        s.reduce(.tick, at: at(150))
+        #expect(s.nextDeadline == nil)
+        s.reduce(.tick, at: at(5_000))
+        #expect(s.layout == .dormant)
+        s.reduce(.pointerDown(onNotch), at: at(5_100))
         #expect(s.layout == .expanded)
+    }
+
+    @Test func leavingTheOpenNotchClosesItAfterTheGrace() {
+        var s = openState()
         s.reduce(.pointerMoved(farAway, dragging: false), at: at(1_000))
         #expect(s.layout == .expanded)
         #expect(!s.capturesPointer)
-        s.reduce(.tick, at: at(1_450))
+        s.reduce(.pointerMoved(inPanel, dragging: false), at: at(1_200))   // overshoot and back
+        s.reduce(.tick, at: at(1_700))
+        #expect(s.layout == .expanded)
+        s.reduce(.pointerMoved(farAway, dragging: false), at: at(2_000))
+        s.reduce(.tick, at: at(2_450))
         #expect(s.layout == .dormant)
     }
 
@@ -124,27 +176,14 @@ private func openState() -> NotchState {
         var s = NotchState(geometry: geometry, now: t0)
         s.reduce(.pointerMoved(topEdge, dragging: false), at: t0)
         #expect(s.capturesPointer)
-        s.reduce(.tick, at: at(150))
+        s.reduce(.pointerDown(topEdge), at: t0)
         #expect(s.layout == .expanded)
-        var c = NotchState(geometry: geometry, now: t0)
-        c.reduce(.pointerDown(topEdge), at: t0)
-        #expect(c.layout == .expanded)
     }
 
-    @Test func aQuickSweepDoesNotOpen() {
-        var s = NotchState(geometry: geometry, now: t0)
-        s.reduce(.pointerMoved(onNotch, dragging: false), at: t0)
-        s.reduce(.pointerMoved(farAway, dragging: false), at: at(60))
-        s.reduce(.tick, at: at(500))
-        #expect(s.layout == .dormant)
-    }
-
-    @Test func draggingAcrossTheClosedNotchDoesNotOpenOrTakeTheMouse() {
+    @Test func draggingAcrossTheClosedNotchDoesNotTakeTheMouse() {
         var s = NotchState(geometry: geometry, now: t0)
         s.reduce(.pointerMoved(onNotch, dragging: true), at: t0)
         #expect(!s.capturesPointer)
-        s.reduce(.tick, at: at(1_000))
-        #expect(s.layout == .dormant)
     }
 
     @Test func movingWithinTheSameSideLeavesStateEqual() {
@@ -155,41 +194,38 @@ private func openState() -> NotchState {
         #expect(next == s)
     }
 
-    @Test func clickOpensAtOnceAndClickOutsideCloses() {
+    @Test func clickOutsideCloses() {
         var s = openState()
-        #expect(s.layout == .expanded)
         s.reduce(.pointerDown(farAway), at: at(100))
         #expect(s.layout == .dormant)
     }
-
-    @Test func escapeWithThePointerOnTheNotchStaysClosed() {
-        var s = openState()
-        s.reduce(.beginEditing, at: t0)
-        s.reduce(.key(.cancel), at: at(1_000))
-        s.reduce(.tick, at: at(5_000))
-        #expect(!s.surface.isOpen)
-        s.reduce(.pointerMoved(farAway, dragging: false), at: at(6_000))
-        s.reduce(.pointerMoved(onNotch, dragging: false), at: at(7_000))
-        s.reduce(.tick, at: at(7_200))
-        #expect(s.surface.isOpen)   // left and came back
-    }
 }
 
-@Suite struct Editing {
-    @Test func typingFillsFromTheRightAndReturnStarts() {
+@Suite struct Custom {
+    @Test func typedMinutesStartOnReturnAndBecomeTheCustomLength() {
         var s = openState()
-        s.reduce(.beginEditing, at: t0)
+        s.reduce(.select(.custom), at: t0)
         #expect(s.wantsKeyFocus)
-        for d: Digit in [.zero, .one, .three, .zero, .zero] { s.reduce(.key(.digit(d)), at: t0) }
-        #expect(s.entry.fields == (0, 13, 0))
+        #expect(s.startable == nil)
+        for d: Digit in [.zero, .four, .five] { s.reduce(.key(.digit(d)), at: t0) }
+        #expect(s.entry.minutes == 45)
         s.reduce(.key(.submit), at: at(10))
         #expect(!s.wantsKeyFocus)
-        #expect(s.nextDeadline == at(10).advanced(by: .seconds(780)))
+        #expect(s.custom == TimerDuration(seconds: 45 * 60))
+        #expect(s.nextDeadline == at(10).advanced(by: minutes(45)))
     }
 
-    @Test func pointerExitIsIgnoredWhileEditing() {
+    @Test func escapeWithNothingTypedFallsBackToFocus() {
         var s = openState()
-        s.reduce(.beginEditing, at: t0)
+        s.reduce(.select(.custom), at: t0)
+        s.reduce(.key(.cancel), at: at(100))
+        #expect(!s.surface.isOpen)
+        #expect(s.selection == .focus(.fifty))
+    }
+
+    @Test func pointerExitIsIgnoredWhileTyping() {
+        var s = openState()
+        s.reduce(.select(.custom), at: t0)
         s.reduce(.pointerMoved(farAway, dragging: false), at: at(100))
         s.reduce(.tick, at: at(5_000))
         #expect(s.surface.mode == .editing)
@@ -197,21 +233,19 @@ private func openState() -> NotchState {
         #expect(!s.surface.isOpen)   // outside for longer than the grace: closes at once
     }
 
-    @Test func editingIsRefusedWhileRunning() {
+    @Test func choosingAnotherPhaseStopsTyping() {
         var s = openState()
-        s.reduce(.preset(seconds(60)), at: t0)
-        s.reduce(.beginEditing, at: at(10))
-        #expect(s.surface.mode == .browsing)
-        s.reduce(.key(.digit(.five)), at: at(20))
-        #expect(s.entry == DurationEntry(seconds(60)))
+        s.reduce(.select(.custom), at: t0)
+        s.reduce(.select(.rest), at: at(10))
+        #expect(!s.wantsKeyFocus)
+        #expect(s.selection == .rest)
     }
 
-    @Test func entryNormalisesAndCaps() {
-        #expect(DurationEntry(seconds(90)).fields == (0, 1, 30))
+    @Test func entryCaps() {
         var e = DurationEntry()
         e.push(.zero)
         #expect(e.digits.isEmpty)
-        for d: Digit in [.nine, .nine, .nine, .nine, .nine, .nine, .nine] { e.push(d) }
+        for _ in 0..<5 { e.push(.nine) }
         #expect(e.digits.count == DurationEntry.capacity)
         #expect(e.duration?.seconds == TimerDuration.range.upperBound)
         #expect(DurationEntry().duration == nil)
