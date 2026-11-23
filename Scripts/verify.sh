@@ -1,5 +1,5 @@
 #!/bin/bash
-# The single gate. Default: package build + headless tests + app build into .build/xcode, then the
+# The single gate. Default: package build + headless tests + the hooks script test + app build into .build/xcode, then the
 # disk image .build/Notched-<version>.dmg, installed into /Applications (Scripts/package.sh).
 #   --no-app    skip the Xcode app build and the disk image
 #   --no-dmg    skip the disk image and the install
@@ -40,6 +40,9 @@ filtered "Build complete" swift build --package-path "$PKG"
 
 step "Headless tests"
 filtered "✘|Test run" swift test --package-path "$PKG"
+
+step "Agent hooks script (temporary files only)"
+filtered "passed" Scripts/agent-hooks-test.sh
 
 if [[ $APP -eq 1 ]]; then
   step "App build"

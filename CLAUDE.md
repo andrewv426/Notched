@@ -33,6 +33,10 @@ The user keeps working on this Mac while tests run, so test in the background by
 | The real keyboard path: typing into the panel from another app | The self-test sends key events straight to the panel | By hand |
 | How it looks over the real menu bar, the spring animation, full-screen Spaces | Snapshots render the panel to a bitmap off-screen | The PNGs from `Scripts/vm-selftest.sh` (no notch there), or by hand |
 | Behaviour across sleep and wake | Not scripted | By hand: start a timer, sleep, wake after it ends |
+| Real Claude Code hooks firing (CLI and inside T3 Code) | The self-test writes inbox files and runs the helper itself; it never runs `claude` | By hand: `Scripts/agent-hooks.sh install`, run `claude`, and watch `~/Library/Application Support/Notched/agents` |
+| Clicking an agent row bringing its app to the front | A test run never activates another app | By hand: click a row in the open notch |
+
+Agents working in this repo never run `Scripts/agent-hooks.sh install` or `uninstall` against the user's real `~/.claude/settings.json`; `Scripts/agent-hooks-test.sh` tests it on temporary copies. Only the user runs it for real.
 
 The self-test skips focus checks it cannot run and lists them as `skip` in the `RESULT` line, never passing them silently.
 

@@ -200,6 +200,159 @@ enum SelfTest {
         check(state.layout == .dormant, "with the pointer still on the notch, it stays closed")
         controller.send(.pointerMoved(farAway, dragging: false))
 
+        // MARK: Agents
+
+        guard let inbox = controller.inbox, let me = AgentProcess.info(getpid()) else {
+            check(false, "the controller watches an agent inbox")
+            finish(log: log, passed: passed, failed: failed, skipped: skipped, output: output)
+        }
+        check(inbox.directory.path.hasPrefix(output.path), "the self-test reads its own agent inbox, not the user's")
+        check(state.agents.visible.isEmpty, "the test inbox starts empty")
+        func record(_ session: String, _ status: AgentStatus, project: String, tool: String? = "Bash",
+                    process: AgentProcess.Info? = me) {
+            let now = Date().timeIntervalSince1970
+            let r = AgentRecord(tool: .claude, session: session, cwd: "/Users/test/src/\(project)", status: status,
+                                toolName: tool, since: now, updated: now, ended: false, pid: process?.pid,
+                                pidStart: process?.start, host: "com.apple.Terminal")
+            guard let name = AgentRecord.fileName(tool: .claude, session: session),
+                  let data = try? JSONEncoder().encode(r) else { return check(false, "encode \(session)") }
+            do { try data.write(to: inbox.directory.appendingPathComponent(name), options: .atomic) } catch {
+                check(false, "write \(session): \(error.localizedDescription)")
+            }
+        }
+        func visible(_ session: String) -> AgentSession? { state.agents.visible.first { $0.id.session == session } }
+        func colour(_ status: AgentStatus) -> (UInt8, UInt8, UInt8) {
+            switch status {
+            case .working: (128, 189, 255)
+            case .permission, .question: (255, 166, 51)
+            case .done: (82, 219, 128)
+            case .failed: (255, 92, 92)
+            }
+        }
+
+        record("busy-1", .working, project: "flotion")
+        record("busy-2", .working, project: "arcx")
+        check(await waitFor { state.layout == .peek && state.wings == .agentsBusy(count: 2) },
+              "two working agents grow the narrow busy wings")
+        await pause(0.8)
+        if let pixels = snapshot("08-agents-busy") {
+            let size = g.size(for: .peek)
+            let expected = (size.width * size.height) / (g.canvas.width * g.canvas.height)
+            let black = pixels.share(of: (0, 0, 0))
+            check(black > expected * 0.6 && black < expected * 1.1,
+                  "the busy wings are drawn: black covers \(percent(black)) of the canvas (shape is \(percent(expected)))")
+            check(pixels.share(of: colour(.working), tolerance: 40) > 0.0002, "the busy wings show the working colour")
+        }
+
+        record("ask", .permission, project: "Notched")
+        check(await waitFor { state.layout == .callout }, "an agent that needs permission takes the wings")
+        if case .agentAttention(let top, let others) = state.wings {
+            check(top.id.session == "ask" && others == 0, "the wings name the agent that asks, got \(top.project) +\(others)")
+        } else {
+            check(false, "the wings show agent attention, got \(String(describing: state.wings))")
+        }
+        await pause(0.8)
+        if let pixels = snapshot("09-agent-attention") {
+            check(pixels.share(of: colour(.permission), tolerance: 40) > 0.0002, "the callout shows the needs-input colour")
+            check(pixels.share(of: (255, 255, 255), tolerance: 60) > 0.0005, "the callout shows the project name")
+        }
+
+        controller.send(.pointerDown(onNotch))
+        check(state.layout == .expanded && state.page == .agents, "clicking the calling notch opens the Agents page")
+        check(state.agents.attention.isEmpty, "opening the Agents page sees what it shows")
+        check(state.agents.visible.map(\.id.session) == ["ask", "busy-1", "busy-2"] ||
+              state.agents.visible.map(\.id.session) == ["ask", "busy-2", "busy-1"],
+              "the list puts needs-input first, got \(state.agents.visible.map(\.id.session))")
+        await pause(0.8)
+        if let pixels = snapshot("10-agents-page") {
+            check(pixels.share(of: (0, 0, 0)) > 0.45, "the Agents page is drawn")
+            check(pixels.share(of: colour(.permission), tolerance: 40) > 0.0003, "the needs-input row is tinted")
+        }
+        controller.send(.showPage(.timer))
+        check(state.page == .timer, "the Timer chip goes back to the timer")
+        controller.send(.showPage(.agents))
+        controller.send(.pointerDown(farAway))
+        check(state.layout == .peek && state.agents.tone == .permission,
+              "once seen, needs-input gives the wings back to the busy agents, tinted")
+
+        record("busy-1", .done, project: "flotion", tool: nil)
+        check(await waitFor { state.layout == .callout && state.agents.attention.first?.id.session == "busy-1" },
+              "a finished turn takes the wings until it is seen")
+        controller.send(.pointerDown(onNotch))
+        controller.send(.agentActivated(AgentSessionID(tool: .claude, session: "busy-1")))
+        check(!state.surface.isOpen, "clicking a row closes the notch")
+        check(controller.focuser.lastRequest?.session.session == "busy-1"
+              && controller.focuser.lastRequest?.host == "com.apple.Terminal",
+              "clicking a row asks once for the agent's app (a test run activates nothing)")
+        check(visible("busy-1") == nil, "the seen finished turn leaves when the notch closes")
+
+        guard let minute = TimerDuration(seconds: 60) else { return }
+        controller.send(.run(minute, .focus(.fifty)))
+        check(state.layout == .glance && state.agentBadge == .permission,
+              "with a timer running, agents become a dot on the timer's wings")
+        await pause(0.8)
+        if let pixels = snapshot("11-timer-with-agents") {
+            check(pixels.share(of: colour(.permission), tolerance: 40) > 0.00005, "the badge dot is drawn")
+        }
+        record("busy-2", .question, project: "arcx", tool: "AskUserQuestion")
+        check(await waitFor { state.layout == .callout }, "a new question outranks the running timer")
+        controller.send(.timer(.reset))
+
+        let sleeper = Process()
+        sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleeper.arguments = ["60"]
+        if (try? sleeper.run()) != nil, let process = AgentProcess.info(sleeper.processIdentifier) {
+            record("doomed", .working, project: "doomed", process: process)
+            check(await waitFor { visible("doomed") != nil }, "an agent with a running process is listed")
+            sleeper.terminate()
+            check(await waitFor { visible("doomed") == nil }, "an agent whose process exits leaves at once")
+            check(!FileManager.default.fileExists(atPath: inbox.directory.appendingPathComponent("claude-doomed.json").path),
+                  "and its file is collected")
+        } else {
+            check(false, "start /bin/sleep as a stand-in agent")
+        }
+
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/notched-agent")
+        func hook(_ json: String) -> (status: Int32, stdout: Data, seconds: Double)? {
+            let p = Process()
+            p.executableURL = helper
+            p.arguments = ["hook", "claude"]
+            p.environment = [AgentInboxPath.environmentKey: inbox.directory.path]
+            let input = Pipe(), out = Pipe()
+            p.standardInput = input
+            p.standardOutput = out
+            let started = Date()
+            guard (try? p.run()) != nil else { return nil }
+            input.fileHandleForWriting.write(Data(json.utf8))
+            try? input.fileHandleForWriting.close()
+            p.waitUntilExit()
+            return (p.terminationStatus, out.fileHandleForReading.readDataToEndOfFile(), Date().timeIntervalSince(started))
+        }
+        let prompt = hook(#"{"session_id":"helper-e2e","cwd":"/tmp/helper-project","hook_event_name":"UserPromptSubmit"}"#)
+        check(prompt?.status == 0 && prompt?.stdout.isEmpty == true, "the built helper exits 0 and prints nothing")
+        check(await waitFor { visible("helper-e2e")?.status == .working }, "the helper's prompt event lists the agent as working")
+        _ = hook(#"{"session_id":"helper-e2e","hook_event_name":"Stop"}"#)
+        check(await waitFor { visible("helper-e2e")?.status == .done && visible("helper-e2e")?.project == "helper-project" },
+              "the helper's Stop event shows the turn as done")
+        let junk = hook("not json")
+        check(junk?.status == 0 && junk?.stdout.isEmpty == true, "a malformed payload still exits 0 silently")
+        var timings: [Double] = []
+        for _ in 0..<30 {
+            if let run = hook(#"{"session_id":"helper-perf","hook_event_name":"PostToolUse","tool_name":"Read"}"#) {
+                timings.append(run.seconds)
+            }
+        }
+        let median = timings.sorted()[timings.count / 2] * 1000
+        log.append(String(format: "PERF helper hook median %.1f ms over %d runs", median, timings.count))
+        // About 5 ms on the host and 16 ms in the VM, spawn and pipes included. The guard catches a hook that
+        // blocks (on Notched, a lock, the network), not a slow spawn.
+        check(timings.count == 30 && median < 50, "a hook costs the agent under 50 ms (median \(Int(median)) ms)")
+
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: inbox.directory.path)) ?? [] {
+            try? FileManager.default.removeItem(at: inbox.directory.appendingPathComponent(name))
+        }
+        check(await waitFor { state.agents.visible.isEmpty && state.layout == .dormant }, "an emptied inbox leaves the notch bare")
+
         // MARK: Screens
 
         let moved = NotchGeometry(screenFrame: g.screenFrame.offsetBy(dx: 0, dy: -200), hardwareNotch: nil)

@@ -114,10 +114,13 @@ extension Countdown {
     }
 
     /// Idle and finished timers take a new duration; running and paused ones must be reset first.
-    public var acceptsNewDuration: Bool {
+    public var acceptsNewDuration: Bool { !isActive }
+
+    /// Running or paused.
+    public var isActive: Bool {
         switch self {
-        case .idle, .finished: true
-        case .running, .paused: false
+        case .running, .paused: true
+        case .idle, .finished: false
         }
     }
 

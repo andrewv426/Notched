@@ -9,6 +9,11 @@ struct ShellOptions {
     /// Mouse monitors, screen-change and wake observers.
     var followsRealInput = true
     var mayTakeKeyFocus = true
+    /// Whether clicking an agent row may bring another app to the front.
+    var mayActivateApps = true
+    /// Where agent hooks write. A test run points it at its own directory.
+    var agentInbox = AgentInboxPath.directory(environment: ProcessInfo.processInfo.environment,
+                                              home: FileManager.default.homeDirectoryForCurrentUser)
 }
 
 /// The shell. Holds the one `NotchState`, turns every input into a `NotchEvent`, and after each
@@ -21,6 +26,7 @@ struct ShellOptions {
 ///   panel key presses while editing        → .key
 ///   didChangeScreenParameters              → .screensChanged
 ///   NSWorkspace.didWake, DeadlineAlarm     → .tick
+///   AgentInbox (files, agent exits, wake)  → .agents
 ///   views                                  → everything else
 ///
 /// Outputs ← `reconcile` (each one does nothing when AppKit already matches):
@@ -28,6 +34,7 @@ struct ShellOptions {
 ///   capturesPointer  → panel.ignoresMouseEvents
 ///   wantsKeyFocus    → panel key status
 ///   nextDeadline     → alarm
+///   agents.focusRequest → Focuser
 ///   layout           → SwiftUI, which observes `state` directly
 @MainActor
 @Observable
@@ -38,12 +45,15 @@ final class NotchController {
     @ObservationIgnored let options: ShellOptions
     @ObservationIgnored private(set) var panel: NotchPanel?
     @ObservationIgnored private let alarm = DeadlineAlarm()
+    @ObservationIgnored let focuser: Focuser
+    @ObservationIgnored private(set) var inbox: AgentInbox?
     @ObservationIgnored private var monitors: [Any] = []
     @ObservationIgnored private var observers: [(NotificationCenter, any NSObjectProtocol)] = []
 
     init(geometry: NotchGeometry, options: ShellOptions = ShellOptions()) {
         state = NotchState(geometry: geometry, now: .now)
         self.options = options
+        focuser = Focuser(mayActivate: options.mayActivateApps)
     }
 
     /// Creates and shows the panel, installs monitors and observers, and reconciles once.
@@ -66,6 +76,9 @@ final class NotchController {
             installObservers()
         }
         reconcile(from: nil)
+        let inbox = AgentInbox(directory: options.agentInbox) { [weak self] in self?.send(.agents($0)) }
+        self.inbox = inbox
+        inbox.start()
     }
 
     /// The single entry point for change. Reads the clock once per event, and assigns only on a
@@ -96,6 +109,7 @@ final class NotchController {
             panel.orderFrontRegardless()
         }
         alarm.arm(at: state.nextDeadline) { [weak self] in self?.send(.tick) }
+        focuser.reflect(state.agents.focusRequest)
 
         // The shape changed under a cursor that may not have moved: Esc or Return can shrink it out
         // from under the pointer. Re-sample, or the canvas keeps taking clicks until the next move.
@@ -142,7 +156,10 @@ final class NotchController {
         let workspace = NSWorkspace.shared.notificationCenter
         observers.append((workspace, workspace.addObserver(forName: NSWorkspace.didWakeNotification,
                                                            object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.send(.tick) }
+            MainActor.assumeIsolated {
+                self?.send(.tick)
+                self?.inbox?.scan()
+            }
         }))
     }
 }

@@ -5,11 +5,16 @@ import CoreGraphics
 public enum NotchLayout: Hashable, Sendable, CaseIterable {
     /// Idle and closed: exactly the hardware notch (or the fallback pill).
     case dormant
+    /// Only agents are busy: narrow wings, a spinner on the left and the count on the right.
+    case peek
     /// Running or paused and closed: wings either side of the notch, a ring on the left and the
     /// remaining time on the right.
     case glance
     /// Finished, not yet seen, and closed: the same wings, pulsing "Done".
     case alert
+    /// An agent finished or needs input, not yet seen: wider wings, a pulsing glyph on the left and
+    /// the project on the right.
+    case callout
     /// Open: the full panel hanging below the notch.
     case expanded
 }
@@ -54,7 +59,9 @@ public struct NotchGeometry: Equatable, Sendable {
     public func size(for layout: NotchLayout) -> CGSize {
         switch layout {
         case .dormant: notch.size
+        case .peek: CGSize(width: notch.width + 2 * Metrics.peekWing, height: notch.height)
         case .glance, .alert: CGSize(width: notch.width + 2 * Metrics.wing, height: notch.height)
+        case .callout: CGSize(width: notch.width + 2 * Metrics.calloutWing, height: notch.height)
         case .expanded: CGSize(width: max(notch.width + 2 * Metrics.panelWing, Metrics.panelMinWidth),
                                height: notch.height + Metrics.panelBody)
         }
@@ -78,6 +85,9 @@ public struct NotchGeometry: Equatable, Sendable {
         static let fallbackNotch = CGSize(width: 180, height: 26)
         /// Fits a ring on the left and "1:02:03" on the right.
         static let wing: CGFloat = 56
+        static let peekWing: CGFloat = 30
+        /// Fits a glyph on the left and a project name of about ten letters on the right.
+        static let calloutWing: CGFloat = 84
         static let panelWing: CGFloat = 90
         static let panelMinWidth: CGFloat = 400
         static let panelBody: CGFloat = 104
