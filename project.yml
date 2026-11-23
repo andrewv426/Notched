@@ -1,0 +1,48 @@
+name: Notched
+options:
+  bundleIdPrefix: app.notched
+  deploymentTarget:
+    # The flotion-test VM runs macOS 26; keep the app runnable there.
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  NotchedKit:
+    path: Packages/NotchedKit
+targets:
+  Notched:
+    type: application
+    platform: macOS
+    sources:
+      - App
+    dependencies:
+      - package: NotchedKit
+        product: NotchedCore
+    settings:
+      base:
+        # UNUserNotificationCenter needs a bundle identifier.
+        PRODUCT_BUNDLE_IDENTIFIER: app.notched.Notched
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Notched
+        # An agent app: no Dock icon and no menu bar of its own. The notch is the whole UI.
+        INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+schemes:
+  Notched:
+    build:
+      targets:
+        Notched: all
+    run:
+      config: Debug
