@@ -10,6 +10,9 @@ public enum NotchLayout: Hashable, Sendable, CaseIterable {
     /// Running or paused and closed: wings either side of the notch, a ring on the left and the
     /// remaining time on the right.
     case glance
+    /// Music playing and closed: the same wings as the timer's, artwork on the left and a waveform
+    /// on the right.
+    case music
     /// Finished, not yet seen, and closed: the same wings, pulsing "Done".
     case alert
     /// An agent finished or needs input, not yet seen: wider wings, a pulsing glyph on the left and
@@ -60,7 +63,7 @@ public struct NotchGeometry: Equatable, Sendable {
         switch layout {
         case .dormant: notch.size
         case .peek: CGSize(width: notch.width + 2 * Metrics.peekWing, height: notch.height)
-        case .glance, .alert: CGSize(width: notch.width + 2 * Metrics.wing, height: notch.height)
+        case .glance, .music, .alert: CGSize(width: notch.width + 2 * Metrics.wing, height: notch.height)
         case .callout: CGSize(width: notch.width + 2 * Metrics.calloutWing, height: notch.height)
         case .expanded: CGSize(width: max(notch.width + 2 * Metrics.panelWing, Metrics.panelMinWidth),
                                height: notch.height + Metrics.panelBody)

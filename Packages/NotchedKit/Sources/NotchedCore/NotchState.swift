@@ -26,8 +26,15 @@ public enum NotchEvent: Equatable, Sendable {
     /// A row on the Agents page was clicked: it counts as seen, the notch closes, and the agent's
     /// app is asked to come forward.
     case agentActivated(AgentSessionID)
-    /// A chip in the open notch's top strip was clicked.
+    /// A chip in the open notch's top strip was clicked. The music page only while something plays.
     case showPage(PanelPage)
+
+    /// What the media source says is playing now. Nil: nothing, anywhere.
+    case nowPlaying(NowPlaying?)
+    /// The Mac's output volume. Nil: the output device has no settable volume.
+    case outputVolume(OutputVolume?)
+    /// A transport button, the scrubber or the volume slider.
+    case media(MediaAction)
 
     case screensChanged(NotchGeometry)
     /// "Time has passed." Sent by the deadline alarm and on wake from sleep. It does nothing by
@@ -51,6 +58,7 @@ public enum TimerAction: Equatable, Sendable {
 /// What the open notch shows below the top strip.
 public enum PanelPage: Equatable, Sendable {
     case timer
+    case music
     case agents
 }
 
@@ -62,13 +70,15 @@ public enum WingContent: Equatable, Sendable {
     case agentAttention(AgentSession, others: Int)
     /// A running or paused timer.
     case timer
+    /// Music is playing, or was paused moments ago.
+    case music
     /// Agents are working, or wait on input the user has already seen.
     case agentsBusy(count: Int)
 }
 
 /// The whole app as one value. `reduce` is the only mutator. Every side effect is a projection the
 /// shell matches after each event (`layout`, `nextDeadline`, `wantsKeyFocus`, `capturesPointer`,
-/// `ringing`, `agents.focusRequest`): there are no effect values and no callbacks out of the domain, so replaying an event
+/// `ringing`, `agents.focusRequest`, `media.request`): there are no effect values and no callbacks out of the domain, so replaying an event
 /// or reconciling twice converges.
 public struct NotchState: Equatable, Sendable {
     public private(set) var countdown: Countdown
@@ -83,8 +93,9 @@ public struct NotchState: Equatable, Sendable {
     /// The last custom length started. Nil until one is typed.
     public private(set) var custom: TimerDuration?
     public private(set) var agents: AgentBoard
-    /// Chosen each time the notch opens: the Agents page when the wings were calling for an agent,
-    /// otherwise the timer.
+    public private(set) var media: Media
+    /// Chosen each time the notch opens: the page of whatever the wings showed (agents calling for
+    /// the user, or music), otherwise the timer.
     public private(set) var page: PanelPage
 
     public init(geometry: NotchGeometry, now: Instant) {
@@ -96,12 +107,13 @@ public struct NotchState: Equatable, Sendable {
         lastFocus = .fifty
         custom = nil
         agents = AgentBoard(launchedAt: now)
+        media = Media()
         page = .timer
     }
 
     /// Applies one event, then settles every time-based rule against `now`, in this order:
-    /// countdown (and the phase that follows a run that just finished), surface, agents, then what
-    /// opening and closing mean. Opening picks the page and acknowledges Done; only the opening
+    /// countdown (and the phase that follows a run that just finished), surface, agents, media, then
+    /// what opening and closing mean. Opening picks the page and acknowledges Done; only the opening
     /// counts, so a timer that finishes while the notch is already open still pulses once it closes.
     /// While the Agents page is open, everything on it is seen. Closing clears seen finished turns.
     public mutating func reduce(_ event: NotchEvent, at now: Instant) {
@@ -151,7 +163,13 @@ public struct NotchState: Equatable, Sendable {
             agents.activate(id, at: now)
             surface.close()
         case .showPage(let p):
-            if surface.isOpen { page = p }
+            if surface.isOpen, p != .music || media.nowPlaying != nil { page = p }
+        case .nowPlaying(let n):
+            media.report(n, at: now)
+        case .outputVolume(let v):
+            media.setOutputVolume(v)
+        case .media(let action):
+            media.perform(action, at: now)
         case .screensChanged(let g):
             geometry = g
         case .tick:
@@ -164,35 +182,42 @@ public struct NotchState: Equatable, Sendable {
         }
         surface.settle(at: now)
         agents.settle(at: now)
+        media.settle(at: now)
         // Custom with nothing typed is not a choice once typing ends.
         if selection == .custom, custom == nil, surface.mode != .editing { selection = .focus(lastFocus) }
         if surface.isOpen, !wasOpen {
-            if case .agentAttention = wings { page = .agents } else { page = .timer }
+            switch wings {
+            case .agentAttention: page = .agents
+            case .music: page = .music
+            case .timerDone, .timer, .agentsBusy, nil: page = .timer
+            }
             countdown.acknowledge()
         }
+        if page == .music, media.nowPlaying == nil { page = .timer }
         if surface.isOpen, page == .agents { agents.see() }
         if wasOpen, !surface.isOpen { agents.clearSeen() }
     }
 
     // MARK: Projections the shell reconciles
 
-    /// The one rule for what shares the closed notch, highest priority first. Music slots in
-    /// between the timer and busy agents.
+    /// The one rule for what shares the closed notch, highest priority first. A timer the user
+    /// started, running or paused, beats music.
     public var wings: WingContent? {
         let attention = agents.attention
         let byPriority: [WingContent?] = [
             ringing.map { _ in .timerDone },
             attention.first.map { .agentAttention($0, others: attention.count - 1) },
             countdown.isActive ? .timer : nil,
+            media.isShowing ? .music : nil,
             agents.visible.isEmpty ? nil : .agentsBusy(count: agents.visible.count),
         ]
         return byPriority.lazy.compactMap { $0 }.first
     }
 
-    /// A dot on the timer's wings when agents have something to show but the timer owns the wings.
+    /// A dot on the timer's or music's wings when agents have something to show behind them.
     public var agentBadge: AgentStatus? {
         switch wings {
-        case .timerDone, .timer: agents.tone
+        case .timerDone, .timer, .music: agents.tone
         case .agentAttention, .agentsBusy, nil: nil
         }
     }
@@ -204,6 +229,7 @@ public struct NotchState: Equatable, Sendable {
         case .timerDone: return .alert
         case .agentAttention: return .callout
         case .timer: return .glance
+        case .music: return .music
         case .agentsBusy: return .peek
         }
     }
@@ -219,9 +245,16 @@ public struct NotchState: Equatable, Sendable {
     }
 
     /// The one wake-up the shell keeps armed: the earliest of the countdown's deadline, the
-    /// surface's grace deadline and an agent's expiry. When it fires, the shell sends `.tick`.
+    /// surface's grace deadline, an agent's expiry and music's linger, gap or command timeout. When
+    /// it fires, the shell sends `.tick`.
     public var nextDeadline: Instant? {
-        [countdown.deadline, surface.deadline, agents.deadline].compactMap { $0 }.min()
+        [countdown.deadline, surface.deadline, agents.deadline, media.deadline].compactMap { $0 }.min()
+    }
+
+    /// The pages the open notch offers, in the order of their chips: the timer always, music while
+    /// something plays, agents while any are listed.
+    public var pages: [PanelPage] {
+        [.timer] + (media.nowPlaying == nil ? [] : [.music]) + (agents.visible.isEmpty ? [] : [.agents])
     }
 
     /// The panel is key exactly while the user is typing a custom length.

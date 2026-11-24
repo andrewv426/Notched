@@ -321,12 +321,13 @@ private func launched() -> NotchState { NotchState(geometry: geometry, now: t0) 
     enum Timer: CaseIterable, Sendable { case idle, running, paused, doneUnseen, doneSeen }
     enum Agents: CaseIterable, Sendable { case none, working, attention }
     enum Expected: Sendable {
-        case timerDone, agentAttention, timer, agentsBusy
+        case timerDone, agentAttention, timer, music, agentsBusy
         init(_ w: WingContent) {
             switch w {
             case .timerDone: self = .timerDone
             case .agentAttention: self = .agentAttention
             case .timer: self = .timer
+            case .music: self = .music
             case .agentsBusy: self = .agentsBusy
             }
         }
