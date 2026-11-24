@@ -18,7 +18,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.controller = controller
             controller.start()
             TestHost.didFinishLaunching()
-            Task { await SelfTest.run(controller: controller, output: output) }
+            Task {
+                if TestHost.isLiveMedia {
+                    await SelfTest.runLiveMedia(controller: controller, output: output)
+                } else {
+                    await SelfTest.run(controller: controller, output: output)
+                }
+            }
             return
         }
         #endif
@@ -28,5 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = NotchController(geometry: geometry)
         self.controller = controller
         controller.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        controller?.stop()
     }
 }
