@@ -35,6 +35,12 @@ The user keeps working on this Mac while tests run, so test in the background by
 | Behaviour across sleep and wake | Not scripted | By hand: start a timer, sleep, wake after it ends |
 | Real Claude Code hooks firing (CLI and inside T3 Code) | The self-test writes inbox files and runs the helper itself; it never runs `claude` | By hand: `Scripts/agent-hooks.sh install`, run `claude`, and watch `~/Library/Application Support/Notched/agents` |
 | Clicking an agent row bringing its app to the front | A test run never activates another app | By hand: click a row in the open notch |
+| Real players on this Mac (Spotify, Music, browser tabs): titles, app names, artwork, and commands reaching them | The background self-test sends synthetic now-playing events; the live media check drives only a fixture player in the VM | By hand: play something, open the music page, use each button, drag the bar |
+| Dragging the scrubber and the volume slider with the real mouse | Synthetic events go straight to the domain | By hand |
+| The waveform's CPU cost while music plays with the notch closed | Not measured | By hand: Activity Monitor over a minute |
+| The volume slider against the volume keys and AirPods switching | The live media check sets the VM's default device only; nothing presses keys or switches devices | By hand |
+
+Agents working in this repo never send playback commands or change the volume on this Mac; the live media check (`Scripts/vm-selftest.sh`) does that in the VM against its own fixture player, and refuses to run on a real Mac. Reading what plays (`mediaremote-adapter.pl … get`) is fine.
 
 Agents working in this repo never run `Scripts/agent-hooks.sh install` or `uninstall` against the user's real `~/.claude/settings.json`; `Scripts/agent-hooks-test.sh` tests it on temporary copies. Only the user runs it for real.
 
