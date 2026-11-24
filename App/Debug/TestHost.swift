@@ -5,7 +5,12 @@ import NotchedCore
 /// How the app behaves when a script runs it for a test (`NOTCHED_SELFTEST=<output dir>`).
 ///
 /// Every test run: no mouse monitors or screen observers (the test sends synthetic events), its own
-/// agent inbox, no other app brought to the front, and a panel that is never restorable.
+/// agent inbox, no other app brought to the front, no real media source or volume (the test sends
+/// synthetic `.nowPlaying` events), and a panel that is never restorable.
+///
+/// `NOTCHED_SELFTEST_MEDIA=live` runs only the live media check instead, against the real adapter
+/// and a fixture player. It sends playback commands and sets the volume, so it refuses to run
+/// anywhere but a virtual Mac (`Scripts/vm-selftest.sh`).
 ///
 /// Background mode (the default; `NOTCHED_FOREGROUND=1` turns it off), so it stays out of the
 /// user's way on their own Mac:
@@ -24,9 +29,11 @@ enum TestHost {
     nonisolated static let isActive = environment["NOTCHED_SELFTEST"] != nil
     static let isBackground = isActive && environment["NOTCHED_FOREGROUND"] != "1"
     static let selfTestOutput = environment["NOTCHED_SELFTEST"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    static let isLiveMedia = isActive && environment["NOTCHED_SELFTEST_MEDIA"] == "live"
 
     static var shellOptions: ShellOptions {
         ShellOptions(followsRealInput: false, mayTakeKeyFocus: !isBackground, mayActivateApps: false,
+                     followsRealMedia: isLiveMedia && isVirtualMac,
                      agentInbox: (selfTestOutput ?? URL(fileURLWithPath: NSTemporaryDirectory()))
                          .appendingPathComponent("agents", isDirectory: true))
     }
@@ -40,6 +47,15 @@ enum TestHost {
     static func geometry() -> NotchGeometry {
         if isBackground { return offscreenGeometry }
         return NotchGeometry.current() ?? offscreenGeometry
+    }
+
+    /// A Tart VM reports a model such as "VirtualMac2,1".
+    static var isVirtualMac: Bool {
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        var model = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("hw.model", &model, &size, nil, 0)
+        return String(decoding: model.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self).hasPrefix("VirtualMac")
     }
 
     private static var activity: NSObjectProtocol?

@@ -353,6 +353,84 @@ enum SelfTest {
         }
         check(await waitFor { state.agents.visible.isEmpty && state.layout == .dormant }, "an emptied inbox leaves the notch bare")
 
+        // MARK: Music (synthetic now-playing events; no player is read or controlled)
+
+        guard let media = controller.media else {
+            check(false, "the controller has a media sink")
+            finish(log: log, passed: passed, failed: failed, skipped: skipped, output: output)
+        }
+        check(state.media.nowPlaying == nil && state.media.volume == nil && media.count == 0,
+              "a test run reads no real player or volume and has sent nothing")
+        let artColour: (UInt8, UInt8, UInt8) = (230, 40, 160)
+        let art = Pixels.squarePNG(colour: artColour).flatMap(controller.artwork.insert)
+        check(art != nil, "artwork bytes go into the cache")
+        let music = Player(bundleID: "com.apple.Music", name: "Music")
+        func song(_ title: String, length: Double? = 215) -> NowPlaying {
+            NowPlaying(player: music, track: Track(title: title, artist: "The Fixtures", album: "Self-Test",
+                                                   duration: length.map { .seconds($0) }, artwork: art),
+                       playback: .playing(elapsed: .seconds(30), instant: .now, rate: 1))
+        }
+        controller.send(.outputVolume(OutputVolume(level: 0.6, isMuted: false)))
+        let first = song("Synthetic Song")
+        controller.send(.nowPlaying(first))
+        check(state.layout == .music, "playing music fills the closed notch's wings")
+        await pause(0.8)
+        if let pixels = snapshot("12-music-wings") {
+            let size = g.size(for: .music)
+            let expected = (size.width * size.height) / (g.canvas.width * g.canvas.height)
+            let black = pixels.share(of: (0, 0, 0))
+            check(black > expected * 0.6 && black < expected * 1.1,
+                  "the music wings are drawn: black covers \(percent(black)) of the canvas (shape is \(percent(expected)))")
+            check(pixels.share(of: artColour, tolerance: 30) > 0.0003, "the wings show the artwork")
+        }
+
+        controller.send(.pointerDown(onNotch))
+        check(state.layout == .expanded && state.page == .music, "clicking the music wings opens the music page")
+        await pause(0.8)
+        if let pixels = snapshot("13-music-page") {
+            check(pixels.share(of: (0, 0, 0)) > 0.45, "the music page is drawn")
+            check(pixels.share(of: artColour, tolerance: 30) > 0.002, "the page shows the artwork")
+            check(pixels.share(of: (255, 255, 255), tolerance: 40) > 0.003, "the page shows the title and the play button")
+        }
+        controller.send(.media(.togglePlayPause))
+        check(media.lastCommand == .pause && media.count == 1 && state.media.nowPlaying?.isPlaying == false,
+              "play/pause sends pause once and shows it paused at once")
+        controller.send(.nowPlaying(first))
+        check(state.media.nowPlaying?.isPlaying == false, "a stale playing report does not undo the click")
+        controller.send(.media(.next))
+        check(media.lastCommand == .next && media.count == 2, "next is sent once")
+        controller.send(.media(.previous))
+        check(media.lastCommand == .previous && media.count == 3, "previous is sent once")
+        controller.send(.media(.seek(to: .seconds(90))))
+        check(media.lastCommand == .seek(to: .seconds(90)), "a click on the scrubber seeks")
+        controller.send(.media(.setVolume(0.25)))
+        check(media.lastCommand == .setVolume(0.25) && state.media.volume?.level == 0.25, "the slider sets the Mac's volume")
+        controller.send(.showPage(.timer))
+        check(state.page == .timer && state.pages == [.timer, .music], "the timer page offers a music chip")
+        await pause(0.6)
+        _ = snapshot("14-timer-page-with-music")
+        controller.send(.pointerDown(farAway))
+
+        controller.send(.nowPlaying(song("Second Song")))
+        controller.send(.run(minute, .focus(.fifty)))
+        check(state.layout == .glance, "a running timer takes the wings from music")
+        controller.send(.timer(.reset))
+        check(state.layout == .music, "reset gives the wings back to music")
+
+        controller.send(.nowPlaying(song("Live Radio", length: nil)))
+        controller.send(.pointerDown(onNotch))
+        let sent = media.count
+        controller.send(.media(.seek(to: .seconds(10))))
+        check(media.count == sent, "a live stream cannot seek")
+        await pause(0.8)
+        _ = snapshot("15-music-live")
+        controller.send(.pointerDown(farAway))
+
+        controller.send(.nowPlaying(nil))
+        check(state.layout == .music, "a moment of nothing playing does not empty the notch")
+        check(await waitFor(4) { state.layout == .dormant && state.media.nowPlaying == nil },
+              "then music leaves the notch (the alarm fired)")
+
         // MARK: Screens
 
         let moved = NotchGeometry(screenFrame: g.screenFrame.offsetBy(dx: 0, dy: -200), hardwareNotch: nil)
@@ -372,6 +450,79 @@ enum SelfTest {
         finish(log: log, passed: passed, failed: failed, skipped: skipped, output: output)
     }
 
+    /// The live media check, for the Tart VM only (`Scripts/vm-selftest.sh`): the real adapter reads a
+    /// fixture player, every transport command must reach it, and the volume must reach CoreAudio.
+    /// The fixture appends each command it receives to `NOTCHED_FIXTURE_LOG`.
+    static func runLiveMedia(controller: NotchController, output: URL) async {
+        try? FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        var log: [String] = []
+        var passed = 0, failed = 0
+        func check(_ condition: Bool, _ what: String) {
+            log.append((condition ? "ok   " : "FAIL ") + what)
+            if condition { passed += 1 } else { failed += 1 }
+        }
+        func waitFor(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
+            let deadline = Date().addingTimeInterval(seconds)
+            while !condition(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+            return condition()
+        }
+        var state: NotchState { controller.state }
+
+        guard TestHost.isVirtualMac, controller.options.followsRealMedia, let media = controller.media,
+              let logPath = ProcessInfo.processInfo.environment["NOTCHED_FIXTURE_LOG"] else {
+            check(false, "the live media check runs only in a virtual Mac, with NOTCHED_FIXTURE_LOG set")
+            finish(log: log, passed: passed, failed: failed, skipped: 0, output: output)
+        }
+        func received() -> [String] {
+            ((try? String(contentsOfFile: logPath, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+        }
+        func position() -> Double { state.media.nowPlaying.map { Double($0.position(at: .now).components.seconds) } ?? -1 }
+
+        check(await waitFor(15) { state.media.nowPlaying?.player.bundleID == "app.notched.fixture-player" },
+              "the adapter reports the fixture player")
+        let first = state.media.nowPlaying
+        check(first?.track.title == "Fixture Track 1" && first?.track.artist == "Notched Test"
+              && first?.track.duration == .seconds(240) && first?.isPlaying == true,
+              "with its title, artist and length, playing, got \(String(describing: first?.track))")
+        check(first?.player.name == "FixturePlayer", "the player is named after its app, got \(first?.player.name ?? "nil")")
+        check(state.layout == .music, "the closed notch shows the music wings")
+
+        controller.send(.media(.togglePlayPause))
+        check(await waitFor(5) { received().last == "pause" }, "play/pause reaches the player as pause")
+        try? await Task.sleep(for: .seconds(2.5))
+        check(state.media.nowPlaying?.isPlaying == false, "the player's own report keeps it paused after the timeout")
+        controller.send(.media(.togglePlayPause))
+        check(await waitFor(5) { received().last == "play" }, "and again as play")
+        controller.send(.media(.next))
+        check(await waitFor(5) { received().last == "next" && state.media.nowPlaying?.track.title == "Fixture Track 2" },
+              "next reaches the player and the new track shows")
+        controller.send(.media(.previous))
+        check(await waitFor(5) { received().last == "previous" && state.media.nowPlaying?.track.title == "Fixture Track 1" },
+              "previous reaches the player")
+        controller.send(.media(.seek(to: .seconds(90))))
+        check(await waitFor(5) { received().last == "seek 90.0" }, "a seek reaches the player at 90 s")
+        try? await Task.sleep(for: .seconds(2.5))
+        check((90...95).contains(position()), "the player's own report puts it at 90 s, got \(position()) s")
+        controller.send(.media(.stop))
+        check(await waitFor(5) { received().last == "stop" }, "stop reaches the player")
+        check(media.count == 6, "six commands, each sent once, got \(media.count)")
+
+        final class Box { var volume: OutputVolume? }
+        let device = Box()
+        let probe = SystemVolume { device.volume = $0 }
+        probe.start()
+        if let start = state.media.volume {
+            let target = start.level > 0.5 ? 0.25 : 0.75
+            controller.send(.media(.setVolume(target)))
+            check(await waitFor(3) { device.volume.map { abs($0.level - target) < 0.02 && !$0.isMuted } == true },
+                  "the slider sets the device's volume to \(target), CoreAudio reads \(String(describing: device.volume))")
+            controller.send(.media(.setVolume(start.level)))
+        } else {
+            check(false, "CoreAudio reports a settable output volume in the VM")
+        }
+        finish(log: log, passed: passed, failed: failed, skipped: 0, output: output)
+    }
+
     private static func finish(log: [String], passed: Int, failed: Int, skipped: Int, output: URL) -> Never {
         let lines = log + ["RESULT pass=\(passed) fail=\(failed) skip=\(skipped)"]
         try? (lines.joined(separator: "\n") + "\n").write(to: output.appendingPathComponent("result.txt"),
@@ -384,6 +535,17 @@ enum SelfTest {
 
 /// A snapshot redrawn into a plain 8-bit sRGB bitmap, so colours compare with known values.
 private struct Pixels {
+    /// A 64-pixel square of one colour, as PNG bytes: stand-in artwork.
+    static func squarePNG(colour: (UInt8, UInt8, UInt8)) -> Data? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.setFillColor(CGColor(srgbRed: CGFloat(colour.0) / 255, green: CGFloat(colour.1) / 255,
+                                     blue: CGFloat(colour.2) / 255, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        return context.makeImage().flatMap { NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:]) }
+    }
+
     let width: Int
     let height: Int
     private let bytes: [UInt8]

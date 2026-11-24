@@ -11,6 +11,9 @@ struct ShellOptions {
     var mayTakeKeyFocus = true
     /// Whether clicking an agent row may bring another app to the front.
     var mayActivateApps = true
+    /// Whether to read what is playing and the Mac's volume, and carry out media commands. A test
+    /// run sends synthetic `.nowPlaying` events instead and never touches a player.
+    var followsRealMedia = true
     /// Where agent hooks write. A test run points it at its own directory.
     var agentInbox = AgentInboxPath.directory(environment: ProcessInfo.processInfo.environment,
                                               home: FileManager.default.homeDirectoryForCurrentUser)
@@ -27,6 +30,8 @@ struct ShellOptions {
 ///   didChangeScreenParameters              → .screensChanged
 ///   NSWorkspace.didWake, DeadlineAlarm     → .tick
 ///   AgentInbox (files, agent exits, wake)  → .agents
+///   AdapterSource (the adapter's stream)   → .nowPlaying
+///   SystemVolume (CoreAudio listeners)     → .outputVolume
 ///   views                                  → everything else
 ///
 /// Outputs ← `reconcile` (each one does nothing when AppKit already matches):
@@ -35,6 +40,7 @@ struct ShellOptions {
 ///   wantsKeyFocus    → panel key status
 ///   nextDeadline     → alarm
 ///   agents.focusRequest → Focuser
+///   media.request    → MediaSink
 ///   layout           → SwiftUI, which observes `state` directly
 @MainActor
 @Observable
@@ -47,6 +53,9 @@ final class NotchController {
     @ObservationIgnored private let alarm = DeadlineAlarm()
     @ObservationIgnored let focuser: Focuser
     @ObservationIgnored private(set) var inbox: AgentInbox?
+    @ObservationIgnored let artwork = ArtworkCache()
+    @ObservationIgnored private(set) var media: MediaSink?
+    @ObservationIgnored private var mediaSource: AdapterSource?
     @ObservationIgnored private var monitors: [Any] = []
     @ObservationIgnored private var observers: [(NotificationCenter, any NSObjectProtocol)] = []
 
@@ -75,10 +84,22 @@ final class NotchController {
             installMonitors()
             installObservers()
         }
+        let source = options.followsRealMedia
+            ? AdapterSource(bundle: .main, artwork: artwork) { [weak self] in self?.send(.nowPlaying($0)) } : nil
+        let volume = options.followsRealMedia ? SystemVolume { [weak self] in self?.send(.outputVolume($0)) } : nil
+        media = MediaSink(source: source, volume: volume)
+        mediaSource = source
         reconcile(from: nil)
         let inbox = AgentInbox(directory: options.agentInbox) { [weak self] in self?.send(.agents($0)) }
         self.inbox = inbox
         inbox.start()
+        source?.start()
+        volume?.start()
+    }
+
+    /// Ends the adapter process, which would otherwise outlive the app until its next write.
+    func stop() {
+        mediaSource?.stop()
     }
 
     /// The single entry point for change. Reads the clock once per event, and assigns only on a
@@ -110,6 +131,7 @@ final class NotchController {
         }
         alarm.arm(at: state.nextDeadline) { [weak self] in self?.send(.tick) }
         focuser.reflect(state.agents.focusRequest)
+        media?.reflect(state.media.request)
 
         // The shape changed under a cursor that may not have moved: Esc or Return can shrink it out
         // from under the pointer. Re-sample, or the canvas keeps taking clicks until the next move.

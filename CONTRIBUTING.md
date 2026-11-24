@@ -43,8 +43,11 @@ The title follows the commit format. Fill in the description from [the template]
 
 | Change | Place | Test it in |
 |---|---|---|
-| Timer, phases, open/close, typing, agent status, wing priority, layout sizes, anything a rule decides | `Packages/NotchedKit/Sources/NotchedCore` | `NotchedCoreTests` |
+| Timer, phases, open/close, typing, agent status, music, wing priority, layout sizes, anything a rule decides | `Packages/NotchedKit/Sources/NotchedCore` | `NotchedCoreTests` |
 | Reading the agent inbox, bringing an agent's app forward | `App/Agents/` | `App/Debug/SelfTest.swift` |
+| Now-playing rules, the adapter's line format | `Packages/NotchedKit/Sources/NotchedCore/Media/` | `NotchedCoreTests` |
+| Running the adapter, CoreAudio volume, artwork | `App/Media/` | `Scripts/vm-selftest.sh` (live media check) |
+| The vendored adapter | `Vendor/MediaRemoteAdapter/`, only through `Scripts/vendor-mediaremote-adapter.sh` | `Scripts/vm-selftest.sh` |
 | The hook helper and the hooks installer | `Agent/main.swift`, `Scripts/agent-hooks.sh` | `App/Debug/SelfTest.swift`, `Scripts/agent-hooks-test.sh` |
 | The panel, mouse monitors, key presses, screen and wake observers | `App/Notch/NotchController.swift`, `NotchPanel.swift` | `App/Debug/SelfTest.swift` |
 | How it looks | `App/Notch/NotchView.swift` | `App/Debug/SelfTest.swift` snapshots |

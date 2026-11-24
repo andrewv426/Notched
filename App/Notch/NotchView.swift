@@ -28,6 +28,9 @@ struct NotchView: View {
         .animation(isOpen ? .spring(response: 0.42, dampingFraction: 0.74) : .spring(response: 0.3, dampingFraction: 0.95),
                    value: state.layout)
         .contextMenu {
+            if state.media.nowPlaying != nil {
+                Button("Stop Playback") { controller.send(.media(.stop)) }
+            }
             Button("Quit Notched") { NSApp.terminate(nil) }
         }
     }
@@ -74,6 +77,17 @@ struct NotchView: View {
             }
             .overlay(alignment: .leading) { AgentBadge(tone: state.agentBadge) }
             .frame(width: state.geometry.size(for: .glance).width)
+        case .music:
+            if let playing = state.media.nowPlaying {
+                Wings(notchWidth: notch.width, height: notch.height) {
+                    Artwork(image: controller.artwork.image(for: playing.track.artwork), player: playing.player,
+                            size: 18, corner: 4)
+                } trailing: {
+                    Waveform(playing: playing.isPlaying).font(.system(size: 13, weight: .semibold))
+                }
+                .overlay(alignment: .leading) { AgentBadge(tone: state.agentBadge) }
+                .frame(width: state.geometry.size(for: .music).width)
+            }
         case .alert:
             let accent = (state.countdown.phase ?? state.selection).accent
             Wings(notchWidth: notch.width, height: notch.height) {
@@ -84,7 +98,7 @@ struct NotchView: View {
             .overlay(alignment: .leading) { AgentBadge(tone: state.agentBadge) }
             .frame(width: state.geometry.size(for: .alert).width)
         case .expanded:
-            ExpandedPanel(state: state, send: controller.send)
+            ExpandedPanel(state: state, artwork: controller.artwork, send: controller.send)
                 .frame(width: state.geometry.size(for: .expanded).width, height: state.geometry.size(for: .expanded).height)
         }
     }
@@ -287,6 +301,7 @@ private struct PulsingDot: View {
 /// controls; at the bottom, the phase choices while idle, or progress while running.
 private struct ExpandedPanel: View {
     let state: NotchState
+    let artwork: ArtworkCache
     let send: (NotchEvent) -> Void
 
     private var isTyping: Bool { state.surface.mode == .editing }
@@ -302,37 +317,45 @@ private struct ExpandedPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                if state.page == .agents {
-                    Label("Agents", accent: state.agents.tone?.color ?? .white.opacity(0.5), tinted: false)
-                } else {
-                    modeLabel
+                switch state.page {
+                case .timer: modeLabel
+                case .music: state.media.nowPlaying.map { PlayerLabel(player: $0.player) }
+                case .agents: Label("Agents", accent: state.agents.tone?.color ?? .white.opacity(0.5), tinted: false)
                 }
                 Spacer(minLength: state.geometry.notch.width)
                 if isTyping {
                     Text("minutes · ⏎").font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.45))
                 } else {
-                    pageChip
+                    HStack(spacing: 4) {
+                        ForEach(state.pages.filter { $0 != state.page }, id: \.self) { page in
+                            pageChip(page)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 18)
             .frame(height: state.geometry.notch.height)
 
-            if state.page == .agents {
-                AgentList(state: state, send: send)
-            } else {
-                timerPage
+            switch state.page {
+            case .timer: timerPage
+            case .music: state.media.nowPlaying.map { MusicPage(nowPlaying: $0, volume: state.media.volume, artwork: artwork, send: send) }
+            case .agents: AgentList(state: state, send: send)
             }
         }
     }
 
-    /// The other page's chip: agents (with a count) from the timer, the timer from agents.
+    /// A chip for each other page: the timer, music (moving while it plays), agents with a count.
     @ViewBuilder
-    private var pageChip: some View {
-        if state.page == .agents {
-            Chip(title: "Timer", detail: nil, selected: false) { send(.showPage(.timer)) }
-        } else if let tone = state.agents.tone {
-            Button { send(.showPage(.agents)) } label: {
-                HStack(spacing: 5) {
+    private func pageChip(_ page: PanelPage) -> some View {
+        Button { send(.showPage(page)) } label: {
+            HStack(spacing: 5) {
+                switch page {
+                case .timer:
+                    Image(systemName: "timer")
+                case .music:
+                    Waveform(playing: state.media.nowPlaying?.isPlaying == true)
+                case .agents:
+                    let tone = state.agents.tone ?? .working
                     if state.agents.attention.isEmpty {
                         Spinner(color: tone.color).frame(width: 9, height: 9)
                     } else {
@@ -340,16 +363,16 @@ private struct ExpandedPanel: View {
                     }
                     Text("\(state.agents.visible.count)").monospacedDigit()
                 }
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(tone.color)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(.white.opacity(0.1)))
-                .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
-            .help("Agents")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(page == .agents ? (state.agents.tone ?? .working).color : .white.opacity(0.75))
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(Capsule().fill(.white.opacity(0.1)))
+            .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
+        .help(page.title)
     }
 
     private var timerPage: some View {
@@ -509,9 +532,10 @@ private struct ProgressBar: View {
     }
 }
 
-private struct RoundButton: View {
+struct RoundButton: View {
     let symbol: String
     var prominent = false
+    var diameter: CGFloat = 40
     let help: String
     let action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
@@ -519,8 +543,8 @@ private struct RoundButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 40, height: 40)
+                .font(.system(size: diameter * 0.375, weight: .semibold))
+                .frame(width: diameter, height: diameter)
                 .background(Circle().fill(prominent ? .white : .white.opacity(0.12)))
                 .foregroundStyle(prominent ? .black : .white)
                 .opacity(isEnabled ? 1 : 0.25)
@@ -531,7 +555,7 @@ private struct RoundButton: View {
     }
 }
 
-private struct PressScale: ButtonStyle {
+struct PressScale: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.92 : 1)
