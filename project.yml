@@ -26,9 +26,17 @@ targets:
     sources:
       - App
       - Shared
+      # Run by /usr/bin/perl with the framework below; see App/Media/AdapterSource.swift.
+      - path: Vendor/MediaRemoteAdapter/bin/mediaremote-adapter.pl
+        buildPhase: resources
     dependencies:
       - package: NotchedKit
         product: NotchedCore
+      # Loaded by perl, never by Notched: embedded in Contents/Frameworks but not linked.
+      - target: MediaRemoteAdapter
+        link: false
+        embed: true
+        codeSign: true
       # The hook helper ships inside the app; Scripts/agent-hooks.sh copies it to a stable path.
       - target: notched-agent
         embed: true
@@ -60,6 +68,28 @@ targets:
       base:
         PRODUCT_NAME: notched-agent
         PRODUCT_BUNDLE_IDENTIFIER: app.notched.agent
+  # ungive/mediaremote-adapter, vendored unchanged (Scripts/vendor-mediaremote-adapter.sh).
+  MediaRemoteAdapter:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Vendor/MediaRemoteAdapter/src
+        headerVisibility: project
+      - path: Vendor/MediaRemoteAdapter/include
+        headerVisibility: project
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.notched.MediaRemoteAdapter
+        GENERATE_INFOPLIST_FILE: YES
+        CLANG_ENABLE_OBJC_ARC: YES
+        # perl finds the adapter's entry points by name, so they must stay exported.
+        GCC_SYMBOLS_PRIVATE_EXTERN: NO
+        HEADER_SEARCH_PATHS: ["$(SRCROOT)/Vendor/MediaRemoteAdapter/include", "$(SRCROOT)/Vendor/MediaRemoteAdapter/src"]
+        OTHER_LDFLAGS: ["-framework", "AppKit", "-framework", "UniformTypeIdentifiers"]
+        # Upstream code, kept byte-for-byte: its warnings are upstream's to fix.
+        GCC_WARN_INHIBIT_ALL_WARNINGS: YES
+        SKIP_INSTALL: YES
+        DEFINES_MODULE: NO
 schemes:
   Notched:
     build:
